@@ -214,4 +214,16 @@ class Transcription:
         Returns:
             str: Текст транскрипции
         """
-        return await self.transcriber.transcribe(audio_path) 
+        return await self.transcriber.transcribe(audio_path)
+        
+    async def transcribe(self, audio_path):
+        """
+        Альтернативный метод для совместимости с существующим кодом.
+        
+        Args:
+            audio_path (str): Путь к аудиофайлу
+            
+        Returns:
+            str: Текст транскрипции
+        """
+        return await self.transcribe_audio(audio_path) 
