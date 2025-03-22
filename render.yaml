@@ -1,0 +1,19 @@
+services:
+  # Web service для Telegram бота
+  - type: web
+    name: video2post-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TEMP_FOLDER
+        value: ./temp
+      - key: OUTPUT_FOLDER
+        value: ./output
+    
+    # Настройки плана (можно изменить в соответствии с требованиями)
+    plan: free 
