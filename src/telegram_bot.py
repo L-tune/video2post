@@ -3,9 +3,9 @@ import logging
 import asyncio
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from src.download_manager import DownloadManager
-from src.transcription import WhisperTranscriber
-from src.content_generator import ContentGenerator
+from .download_manager import DownloadManager
+from .transcription import WhisperTranscriber
+from .content_generator import ContentGenerator
 
 logger = logging.getLogger(__name__)
 
