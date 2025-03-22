@@ -9,18 +9,23 @@ load_dotenv()
 
 async def test_transcription():
     """
-    Тестирование транскрипции аудио через Whisper API
+    Тестирование транскрипции аудио через Claude API
     без запуска полного Telegram бота
     """
-    # Получение API ключа из переменных окружения
+    # Получение API ключей из переменных окружения
     openai_api_key = os.getenv("OPENAI_API_KEY")
+    claude_api_key = os.getenv("CLAUDE_API_KEY")
     
     if not openai_api_key:
         print("Ошибка: OPENAI_API_KEY не найден в .env файле")
         return
     
+    if not claude_api_key:
+        print("Ошибка: CLAUDE_API_KEY не найден в .env файле")
+        return
+    
     # Создание экземпляра класса транскрипции
-    transcription = Transcription(openai_api_key)
+    transcription = Transcription(openai_api_key, claude_api_key, use_claude=True)
     
     # Создание временной директории, если она не существует
     temp_folder = os.getenv("TEMP_FOLDER", "temp")
@@ -36,7 +41,7 @@ async def test_transcription():
         print("Или укажите путь к существующему аудиофайлу в коде")
         return
     
-    print(f"Начинаю транскрипцию файла: {test_audio_file}")
+    print(f"Начинаю транскрипцию файла через Claude API: {test_audio_file}")
     try:
         # Транскрипция аудиофайла
         transcription_text = await transcription.transcribe_audio(test_audio_file)

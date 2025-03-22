@@ -4,7 +4,7 @@ import asyncio
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from .download_manager import DownloadManager
-from .transcription import WhisperTranscriber
+from .transcription import Transcription
 from .content_generator import ContentGenerator
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ class TelegramBot:
         
         # Инициализация сервисов
         self.download_manager = DownloadManager(temp_folder)
-        self.transcriber = WhisperTranscriber(openai_api_key)
+        self.transcriber = Transcription(openai_api_key, claude_api_key, use_claude=True)
         self.content_generator = ContentGenerator(openai_api_key, claude_api_key)
         
         # Инициализация приложения

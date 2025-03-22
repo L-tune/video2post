@@ -19,7 +19,7 @@ load_dotenv()
 
 async def test_full_pipeline(video_path):
     """
-    Тестирование полного конвейера обработки: видео -> аудио -> транскрипция -> пост
+    Тестирование полного конвейера обработки от видео к посту
     без запуска Telegram бота
     """
     # Получение API ключей из переменных окружения
@@ -28,11 +28,11 @@ async def test_full_pipeline(video_path):
     
     if not openai_api_key:
         logger.error("OPENAI_API_KEY не найден в .env файле")
-        return
+        return None
     
     if not claude_api_key:
         logger.error("CLAUDE_API_KEY не найден в .env файле")
-        return
+        return None
     
     # Создание временных директорий
     temp_folder = os.getenv("TEMP_FOLDER", "temp")
@@ -43,7 +43,7 @@ async def test_full_pipeline(video_path):
     # Проверка наличия видеофайла
     if not os.path.exists(video_path):
         logger.error(f"Видеофайл не найден: {video_path}")
-        return
+        return None
     
     logger.info(f"Начинаю обработку видео: {video_path}")
     
@@ -54,7 +54,7 @@ async def test_full_pipeline(video_path):
         logger.info(f"Аудио успешно извлечено: {audio_path}")
         
         # 2. Транскрипция аудио
-        transcription_service = Transcription(openai_api_key)
+        transcription_service = Transcription(openai_api_key, claude_api_key, use_claude=True)
         transcription_text = await transcription_service.transcribe_audio(audio_path)
         logger.info("Транскрипция успешно получена")
         
