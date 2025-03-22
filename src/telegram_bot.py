@@ -87,12 +87,10 @@ class TelegramBot:
             
             # Транскрипция видео
             await message.edit_text("Расшифровываю речь из видео... Это может занять некоторое время.")
-            # Пропустим транскрипцию для тестирования
-            # transcription = await self.transcriber.transcribe(video_path)
-            transcription = "Это тестовая транскрипция для проверки работы бота. Мы пропускаем шаг транскрипции через Whisper, чтобы проверить генерацию поста через Claude API."
+            transcription = await self.transcriber.transcribe(video_path)
             
             # Создание текстового поста
-            await message.edit_text("Генерирую пост на основе расшифровки...")
+            await message.edit_text("Генерирую пост на основе расшифровки с помощью Claude API...")
             post_content = await self.content_generator.generate_post(transcription, use_claude=True)
             
             # Отправка результата
