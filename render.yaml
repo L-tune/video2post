@@ -3,7 +3,7 @@ services:
   - type: web
     name: video2post-bot
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && pip install anthropic==0.49.0
     startCommand: python bot.py
     envVars:
       - key: TELEGRAM_BOT_TOKEN
