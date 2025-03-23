@@ -25,10 +25,20 @@ class TelegramBot:
         """
         self.token = token
         
-        # Логирование информации о ключе для отладки
+        # Логирование информации о ключах для отладки
         logger.info(f"Получен ключ OpenAI API: {openai_api_key[:10]}...")
         self.openai_api_key = openai_api_key
+        
+        # Логируем информацию о ключе Claude, если он предоставлен
+        use_claude = False
+        if claude_api_key:
+            logger.info(f"Получен ключ Claude API: {claude_api_key[:10]}...")
+            use_claude = True
+        else:
+            logger.info("Ключ Claude API не предоставлен, будет использоваться OpenAI API")
+            
         self.claude_api_key = claude_api_key
+        
         self.temp_folder = temp_folder
         self.output_folder = output_folder
         
@@ -39,7 +49,7 @@ class TelegramBot:
         # Инициализация сервисов
         self.download_manager = DownloadManager(temp_folder)
         
-        # Проверка ключа перед передачей
+        # Проверка ключа OpenAI перед передачей
         if not openai_api_key or openai_api_key == "OPENAI_API_KEY":
             logger.error("Некорректный ключ OpenAI API")
             raise ValueError("Некорректный ключ OpenAI API")
@@ -48,7 +58,20 @@ class TelegramBot:
         self.transcriber = WhisperTranscriber(openai_api_key)
         
         logger.info(f"Инициализация генератора контента с ключом: {openai_api_key[:10]}...")
-        self.content_generator = ContentGenerator(openai_api_key)
+        if use_claude:
+            logger.info(f"Будет использоваться модель Claude")
+            self.content_generator = ContentGenerator(
+                api_key=openai_api_key,
+                use_claude=True,
+                claude_api_key=claude_api_key
+            )
+        else:
+            logger.info(f"Будет использоваться модель OpenAI GPT")
+            self.content_generator = ContentGenerator(
+                api_key=openai_api_key,
+                use_claude=False,
+                claude_api_key=None
+            )
         
         # Инициализация приложения
         self.application = Application.builder().token(token).build()
