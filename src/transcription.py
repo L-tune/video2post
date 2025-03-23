@@ -1,7 +1,7 @@
 import os
 import logging
 import asyncio
-import openai
+from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +15,23 @@ class WhisperTranscriber:
         Args:
             api_key (str): Ключ API OpenAI
         """
+        logger.info(f"WhisperTranscriber: Получен ключ API: {api_key[:10]}...")
+        
+        # Проверка на пустой или неверный ключ
+        if not api_key or api_key == "OPENAI_API_KEY" or not isinstance(api_key, str):
+            error_msg = f"WhisperTranscriber: Некорректный ключ API: {type(api_key)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+            
         self.api_key = api_key
-        openai.api_key = api_key
+        
+        # Создание клиента OpenAI с явным указанием ключа API
+        try:
+            self.client = OpenAI(api_key=api_key)
+            logger.info("WhisperTranscriber: Клиент OpenAI успешно создан")
+        except Exception as e:
+            logger.error(f"WhisperTranscriber: Ошибка при создании клиента OpenAI: {e}")
+            raise
     
     async def transcribe(self, audio_path):
         """
@@ -59,14 +74,22 @@ class WhisperTranscriber:
         Returns:
             str: Текст транскрипции
         """
-        with open(audio_path, "rb") as audio_file:
-            # Выполнение запроса к Whisper API
-            response = openai.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                language="ru",
-                response_format="text"
-            )
+        try:
+            logger.info(f"Начинаю транскрипцию аудио: {audio_path}")
+            logger.info(f"Использую API ключ: {self.api_key[:10]}...")
             
-            # В API V1 результат возвращается напрямую как строка
-            return response 
+            with open(audio_path, "rb") as audio_file:
+                # Выполнение запроса к Whisper API
+                response = self.client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    language="ru",
+                    response_format="text"
+                )
+                
+                logger.info("Транскрипция успешно выполнена")
+                # В API V1 результат возвращается напрямую как строка
+                return response
+        except Exception as e:
+            logger.error(f"Ошибка в _transcribe_sync: {e}")
+            raise 
