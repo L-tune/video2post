@@ -4,11 +4,13 @@ services:
     name: video2post-bot
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
+    startCommand: python bot.py
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: OPENAI_API_KEY
+        sync: false
+      - key: CLAUDE_API_KEY
         sync: false
       - key: TEMP_FOLDER
         value: ./temp
