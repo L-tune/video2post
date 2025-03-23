@@ -1,5 +1,7 @@
 python-telegram-bot==20.5
-anthropic==0.49.0
+anthropic==0.42.0
+httpx==0.23.3
+httpcore==0.16.3
 openai==1.68.2
 python-dotenv==1.0.0
 moviepy==1.0.3
