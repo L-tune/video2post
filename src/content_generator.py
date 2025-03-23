@@ -151,7 +151,7 @@ class ContentGenerator:
         
         # Запрос к GPT-4
         response = openai.chat.completions.create(
-            model="gpt-4-turbo-preview",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Вот транскрипция видео, которую нужно преобразовать в пост в стиле L-TUNE:\n\n{transcription}"}
