@@ -43,25 +43,22 @@ class YouTubeSubtitlesExtractor:
             parts = self.proxy.split(':')
             if len(parts) == 4:
                 host, port, username, password = parts
-                # Для HTTP/HTTPS запросов
+                # Для HTTP/HTTPS запросов и yt-dlp используем один и тот же правильный формат
                 proxy_url = f"http://{username}:{password}@{host}:{port}"
-                # Для yt-dlp формат отличается (socks5/http)
-                ytdlp_proxy_url = f"http://{username}:{password}@{host}:{port}"
                 
                 return {
                     'http': proxy_url,
                     'https': proxy_url,
-                    'ytdlp': ytdlp_proxy_url
+                    'ytdlp': proxy_url
                 }
             elif len(parts) == 2:
                 host, port = parts
                 proxy_url = f"http://{host}:{port}"
-                ytdlp_proxy_url = f"http://{host}:{port}"
                 
                 return {
                     'http': proxy_url,
                     'https': proxy_url,
-                    'ytdlp': ytdlp_proxy_url
+                    'ytdlp': proxy_url
                 }
             else:
                 logger.warning(f"Неверный формат прокси: {self.proxy}, должен быть host:port или host:port:username:password")
