@@ -26,12 +26,6 @@ async def main():
         # Отладочная информация
         logger.info(f"Загруженный OPENAI_API_KEY: {openai_api_key[:10]}...")
         
-        # Выводим информацию о ключе Claude
-        if claude_api_key:
-            logger.info(f"Загруженный CLAUDE_API_KEY: {claude_api_key[:10]}...")
-        else:
-            logger.error("CLAUDE_API_KEY не найден или пустой")
-        
         # Проверка наличия токенов
         if not telegram_token:
             logger.error("Токен Telegram бота не найден. Установите TELEGRAM_BOT_TOKEN в .env файле.")

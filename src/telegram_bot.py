@@ -1,18 +1,13 @@
 import os
 import logging
 import asyncio
-import re
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from .download_manager import DownloadManager
 from .transcription import WhisperTranscriber
 from .content_generator import ContentGenerator
-from .youtube_subtitles import YouTubeSubtitlesExtractor
 
 logger = logging.getLogger(__name__)
-
-# YouTube паттерн для регулярного выражения
-YOUTUBE_REGEX = r'(https?://)?(www\.)?(youtube\.com|youtu\.be|youtube\.com/shorts)/[\w\-?=&./%]+'
 
 class TelegramBot:
     """Класс Telegram бота для обработки видео и генерации постов"""
@@ -59,13 +54,6 @@ class TelegramBot:
         logger.info(f"Инициализация транскрибера с ключом OpenAI: {openai_api_key[:10]}...")    
         self.transcriber = WhisperTranscriber(openai_api_key)
         
-        # Инициализация экстрактора субтитров YouTube
-        self.youtube_extractor = YouTubeSubtitlesExtractor(
-            openai_api_key=openai_api_key,
-            claude_api_key=claude_api_key,
-            use_claude=use_claude
-        )
-        
         if use_claude:
             logger.info(f"Инициализация генератора контента с Claude API")
             self.content_generator = ContentGenerator(
@@ -94,10 +82,7 @@ class TelegramBot:
         # Обработчик видео сообщений
         self.application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, self.process_video))
         
-        # Обработчик для YouTube ссылок с использованием Regex фильтра
-        self.application.add_handler(MessageHandler(filters.TEXT & filters.Regex(YOUTUBE_REGEX), self.process_youtube_link))
-        
-        # Обработчик для любых других текстовых сообщений
+        # Обработчик для любых других сообщений
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.echo))
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -105,55 +90,21 @@ class TelegramBot:
         user = update.effective_user
         await update.message.reply_text(
             f"Привет, {user.first_name}! Я бот для преобразования видео в текстовые посты.\n\n"
-            f"Отправьте мне видеофайл или ссылку на YouTube видео, и я создам готовый пост на основе его содержания."
+            f"Отправьте мне видеофайл, и я создам готовый пост на основе его содержания."
         )
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Обработчик команды /help"""
         await update.message.reply_text(
             "Как пользоваться ботом:\n\n"
-            "1. Отправьте видеофайл (до 20 МБ) или ссылку на YouTube видео\n"
+            "1. Отправьте видеофайл (до 20 МБ)\n"
             "2. Дождитесь обработки (может занять некоторое время в зависимости от длины видео)\n"
             "3. Получите готовый текстовый пост\n\n"
-            "Поддерживаемые форматы:\n"
-            "- Видео: MP4, MOV, AVI\n"
-            "- YouTube ссылки: любой формат (youtu.be, youtube.com/watch, youtube.com/shorts)\n\n"
+            "Поддерживаемые форматы видео: MP4, MOV, AVI\n\n"
             "Команды:\n"
             "/start - Начать работу с ботом\n"
             "/help - Показать справку"
         )
-    
-    async def process_youtube_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Обработчик получения YouTube ссылки"""
-        try:
-            youtube_url = update.message.text
-            
-            # Уведомление о начале обработки
-            message = await update.message.reply_text("Получена ссылка на YouTube видео. Начинаю обработку...")
-            
-            # Извлечение субтитров из YouTube видео
-            await message.edit_text("Получаю субтитры из видео...")
-            subtitles = await self.youtube_extractor.get_subtitles(youtube_url)
-            
-            if not subtitles:
-                await message.edit_text("Не удалось получить субтитры из видео. Возможно, они отключены или недоступны.")
-                return
-            
-            # Генерация саммари из субтитров
-            await message.edit_text("Анализирую субтитры и готовлю саммари...")
-            summary = await self.youtube_extractor.generate_summary(subtitles)
-            
-            # Создание текстового поста на основе саммари
-            await message.edit_text("Генерирую пост на основе ключевых фактов...")
-            post_content = await self.content_generator.generate_post(summary)
-            
-            # Отправка результата
-            await message.edit_text("Готово! Вот ваш пост:")
-            await update.message.reply_text(post_content)
-            
-        except Exception as e:
-            logger.error(f"Ошибка при обработке YouTube видео: {e}")
-            await update.message.reply_text(f"Произошла ошибка при обработке YouTube видео: {str(e)}")
     
     async def process_video(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Обработчик получения видеофайла"""
@@ -193,7 +144,7 @@ class TelegramBot:
     async def echo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Обработчик текстовых сообщений"""
         await update.message.reply_text(
-            "Пожалуйста, отправьте мне видеофайл или ссылку на YouTube видео для обработки.\n"
+            "Пожалуйста, отправьте мне видеофайл для обработки.\n"
             "Используйте /help для получения инструкций."
         )
     
