@@ -1,121 +1,32 @@
-import logging
 import os
-import tempfile
-from typing import Optional, Tuple, Dict, Any
-import subprocess
 import asyncio
+import logging
+import re
+import tempfile
 from moviepy.editor import VideoFileClip
-
-from src.youtube_subtitles import YouTubeSubtitlesExtractor
-from src.summarizer import VideoSummarizer
+from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound, VideoUnavailable
 
 logger = logging.getLogger(__name__)
 
+# Паттерн для извлечения ID видео из YouTube URL
+YOUTUBE_URL_PATTERN = r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})'
+
 class VideoProcessor:
-    """Класс для обработки видео файлов и получения саммари."""
+    """Класс для обработки видеофайлов, YouTube URL и извлечения аудиодорожки."""
     
-    def __init__(self, openai_api_key: str):
+    def __init__(self, temp_folder):
         """
         Инициализация процессора видео.
         
         Args:
-            openai_api_key (str): API ключ OpenAI
+            temp_folder (str): Путь к временной директории для хранения файлов
         """
-        self.openai_api_key = openai_api_key
-        self.summarizer = VideoSummarizer(api_key=openai_api_key)
-        self.youtube_extractor = YouTubeSubtitlesExtractor()
-        
-        logger.info("VideoProcessor: Инициализирован")
+        self.temp_folder = temp_folder
     
-    async def process_video_file(self, video_path: str) -> Dict[str, Any]:
+    async def extract_audio(self, video_path):
         """
-        Обрабатывает видеофайл и возвращает саммари и транскрипцию.
-        
-        Args:
-            video_path (str): Путь к видеофайлу
-            
-        Returns:
-            Dict[str, Any]: Словарь с результатами обработки:
-                - transcript: текст транскрипции
-                - summary: саммари видео
-                - duration: длительность видео в секундах
-        """
-        try:
-            logger.info(f"Начинаю обработку видео файла: {video_path}")
-            
-            # Извлекаем аудио из видео
-            audio_path = await self._extract_audio(video_path)
-            logger.info(f"Аудио извлечено в: {audio_path}")
-            
-            # Получаем транскрипцию
-            transcript = await self._get_transcription(audio_path)
-            logger.info(f"Получена транскрипция длиной {len(transcript)} символов")
-            
-            # Удаляем временный аудиофайл
-            os.remove(audio_path)
-            
-            # Получаем длительность видео
-            duration = self._get_video_duration(video_path)
-            
-            # Получаем саммари
-            summary = await self.summarizer.summarize(transcript)
-            logger.info(f"Получено саммари длиной {len(summary)} символов")
-            
-            return {
-                "transcript": transcript,
-                "summary": summary,
-                "duration": duration
-            }
-            
-        except Exception as e:
-            logger.error(f"Ошибка при обработке видео файла: {e}")
-            raise
-    
-    async def process_youtube_url(self, youtube_url: str) -> Dict[str, Any]:
-        """
-        Обрабатывает YouTube URL и возвращает саммари и транскрипцию.
-        
-        Args:
-            youtube_url (str): Ссылка на YouTube видео
-            
-        Returns:
-            Dict[str, Any]: Словарь с результатами обработки:
-                - transcript: текст транскрипции
-                - summary: саммари видео
-                - video_title: название видео
-                - video_id: ID видео
-                - video_url: URL видео
-        """
-        try:
-            logger.info(f"Начинаю обработку YouTube URL: {youtube_url}")
-            
-            # Получаем субтитры и метаданные
-            subtitle_result = await self.youtube_extractor.get_subtitles(youtube_url)
-            if not subtitle_result["transcript"]:
-                raise Exception("Не удалось получить субтитры для данного видео")
-            
-            transcript = subtitle_result["transcript"]
-            logger.info(f"Получена транскрипция длиной {len(transcript)} символов")
-            
-            # Получаем саммари
-            summary = await self.summarizer.summarize(transcript)
-            logger.info(f"Получено саммари длиной {len(summary)} символов")
-            
-            return {
-                "transcript": transcript,
-                "summary": summary,
-                "video_title": subtitle_result.get("video_title", ""),
-                "video_id": subtitle_result.get("video_id", ""),
-                "video_url": youtube_url
-            }
-            
-        except Exception as e:
-            logger.error(f"Ошибка при обработке YouTube URL: {e}")
-            raise
-    
-    async def _extract_audio(self, video_path: str) -> str:
-        """
-        Извлекает аудио из видеофайла.
+        Извлекает аудиодорожку из видеофайла.
         
         Args:
             video_path (str): Путь к видеофайлу
@@ -124,77 +35,120 @@ class VideoProcessor:
             str: Путь к извлеченному аудиофайлу
         """
         try:
-            # Создаем временный файл для аудио
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                audio_path = tmp_file.name
+            # Получение имени файла без расширения
+            base_name = os.path.basename(video_path).split('.')[0]
+            audio_path = os.path.join(self.temp_folder, f"{base_name}.mp3")
             
-            # Извлекаем аудио асинхронно с помощью ffmpeg
-            proc = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", audio_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
+            # Извлечение аудио с использованием moviepy (в отдельном потоке)
+            await self._extract_audio_with_moviepy(video_path, audio_path)
             
-            stdout, stderr = await proc.communicate()
-            
-            if proc.returncode != 0:
-                logger.error(f"Ошибка при извлечении аудио: {stderr.decode()}")
-                raise Exception(f"Не удалось извлечь аудио из видео: {stderr.decode()}")
-            
+            logger.info(f"Аудио успешно извлечено из {video_path} в {audio_path}")
             return audio_path
-            
-        except Exception as e:
-            logger.error(f"Ошибка при извлечении аудио из видео: {e}")
-            raise
-    
-    async def _get_transcription(self, audio_path: str) -> str:
-        """
-        Получает транскрипцию аудиофайла, используя Whisper API.
         
-        Args:
-            audio_path (str): Путь к аудиофайлу
-            
-        Returns:
-            str: Текст транскрипции
-        """
-        try:
-            from openai import OpenAI
-            
-            client = OpenAI(api_key=self.openai_api_key)
-            
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=open(audio_path, "rb"),
-                    language="ru"
-                )
-            )
-            
-            return response.text
-            
         except Exception as e:
-            logger.error(f"Ошибка при получении транскрипции: {e}")
-            raise
+            logger.error(f"Ошибка при извлечении аудио: {e}")
+            raise Exception(f"Не удалось извлечь аудио из видео: {str(e)}")
     
-    def _get_video_duration(self, video_path: str) -> float:
+    async def _extract_audio_with_moviepy(self, video_path, audio_path):
         """
-        Получает длительность видеофайла в секундах.
+        Извлекает аудио из видео, используя библиотеку moviepy.
         
         Args:
             video_path (str): Путь к видеофайлу
+            audio_path (str): Путь для сохранения аудиофайла
+        """
+        # Запуск CPU-интенсивной задачи в отдельном потоке
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._extract_audio_sync, video_path, audio_path)
+    
+    def _extract_audio_sync(self, video_path, audio_path):
+        """
+        Синхронный метод для извлечения аудио.
+        
+        Args:
+            video_path (str): Путь к видеофайлу
+            audio_path (str): Путь для сохранения аудиофайла
+        """
+        with VideoFileClip(video_path) as video:
+            # Извлечение аудио и сохранение в MP3 с битрейтом 128 kbps
+            video.audio.write_audiofile(
+                audio_path,
+                bitrate="128k",
+                verbose=False,
+                logger=None
+            )
+
+    async def process_youtube_url(self, youtube_url):
+        """
+        Обрабатывает YouTube URL, извлекая субтитры.
+        
+        Args:
+            youtube_url (str): URL видео на YouTube
             
         Returns:
-            float: Длительность видео в секундах
+            dict: Словарь с информацией о видео и транскрипцией
         """
         try:
-            clip = VideoFileClip(video_path)
-            duration = clip.duration
-            clip.close()
-            return duration
+            # Проверка и очистка URL
+            video_id = self._extract_video_id(youtube_url)
+            if not video_id:
+                raise ValueError(f"Не удалось извлечь ID видео из URL: {youtube_url}")
             
+            logger.info(f"Обработка YouTube видео с ID: {video_id}")
+            
+            # Получение субтитров
+            logger.info(f"Получение субтитров для видео {video_id}")
+            try:
+                # Сначала пробуем список доступных транскриптов для отладки
+                available_transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
+                logger.info(f"Доступные транскрипты: {', '.join([f'{t.language} ({t.language_code})' for t in available_transcripts._transcripts.values()])}")
+                
+                # Сначала пробуем получить русские субтитры
+                try:
+                    logger.info("Попытка получить русские субтитры")
+                    transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ru'])
+                    logger.info(f"Получены русские субтитры, {len(transcript_list)} сегментов")
+                except (NoTranscriptFound, TranscriptsDisabled) as e:
+                    logger.info(f"Русские субтитры недоступны: {e}, пробуем английские")
+                    # Если русские недоступны, пробуем английские
+                    transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
+                    logger.info(f"Получены английские субтитры, {len(transcript_list)} сегментов")
+            
+            except Exception as e:
+                logger.error(f"Ошибка при получении субтитров: {e}")
+                logger.info("Попытка получить автоматически созданные транскрипты")
+                try:
+                    transcript = YouTubeTranscriptApi.get_transcript(video_id)
+                    logger.info(f"Получены автоматические субтитры, {len(transcript)} сегментов")
+                    transcript_list = transcript
+                except Exception as nested_e:
+                    logger.error(f"Не удалось получить субтитры: {nested_e}")
+                    raise Exception(f"Не удалось получить субтитры для видео: {str(nested_e)}")
+            
+            # Объединение текста субтитров
+            transcription = " ".join([item['text'] for item in transcript_list])
+            
+            return {
+                'video_id': video_id,
+                'transcription': transcription,
+                'transcript_segments': transcript_list
+            }
+        
         except Exception as e:
-            logger.error(f"Ошибка при получении длительности видео: {e}")
-            logger.warning("Не удалось определить длительность, возвращаю 0.0")
-            return 0.0 
+            logger.error(f"Ошибка при обработке YouTube URL: {e}")
+            raise
+    
+    def _extract_video_id(self, youtube_url):
+        """
+        Извлекает ID видео из YouTube URL.
+        
+        Args:
+            youtube_url (str): URL видео на YouTube
+            
+        Returns:
+            str: ID видео или None, если ID не найден
+        """
+        match = re.search(YOUTUBE_URL_PATTERN, youtube_url)
+        if match:
+            return match.group(6)
+        return None 

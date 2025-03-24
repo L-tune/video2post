@@ -2,248 +2,214 @@ import os
 import logging
 import re
 import asyncio
-import tempfile
-from typing import List, Dict, Any, Optional, Union
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
-
-from src.youtube_subtitles import YouTubeSubtitlesExtractor
-from src.video_processor import VideoProcessor
+from telegram import Update, Bot
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from .download_manager import DownloadManager
+from .transcription import WhisperTranscriber
+from .content_generator import ContentGenerator
 
 logger = logging.getLogger(__name__)
 
+# Паттерн для извлечения ID видео из YouTube URL
 YOUTUBE_URL_PATTERN = r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})'
 
 class TelegramBot:
-    """Класс для взаимодействия с Telegram API."""
+    """Класс Telegram бота для обработки видео и генерации постов"""
     
-    def __init__(self, config):
+    def __init__(self, token, openai_api_key, claude_api_key=None, temp_folder="temp", output_folder="output"):
         """
-        Инициализирует бота с указанными конфигурациями.
+        Инициализация бота.
         
         Args:
-            config (dict): Словарь с конфигурациями
+            token (str): Токен Telegram бота
+            openai_api_key (str): API ключ OpenAI
+            claude_api_key (str, optional): API ключ Claude
+            temp_folder (str): Папка для временных файлов
+            output_folder (str): Папка для выходных файлов
         """
-        self.config = config
-        self.bot_token = config.get('TELEGRAM_BOT_TOKEN')
-        self.openai_api_key = config.get('OPENAI_API_KEY')
-        self.authorized_user_ids = [int(uid) for uid in config.get('AUTHORIZED_USER_IDS', '').split(',') if uid]
+        self.token = token
         
-        # Создаем временную директорию для файлов
-        self.temp_folder = tempfile.mkdtemp()
-        logger.info(f"Создана временная директория: {self.temp_folder}")
+        # Логирование информации о ключах для отладки
+        logger.info(f"Получен ключ OpenAI API: {openai_api_key[:10]}...")
+        self.openai_api_key = openai_api_key
         
-        # Инициализируем процессор видео
-        self.video_processor = VideoProcessor(openai_api_key=self.openai_api_key)
+        # Логируем информацию о ключе Claude, если он предоставлен
+        use_claude = False
+        if claude_api_key:
+            logger.info(f"Получен ключ Claude API: {claude_api_key[:10]}...")
+            use_claude = True
+        self.claude_api_key = claude_api_key
         
-        # Инициализируем обработчик YouTube ссылок
-        self.youtube_extractor = YouTubeSubtitlesExtractor()
+        self.temp_folder = temp_folder
+        self.output_folder = output_folder
         
-        logger.info("TelegramBot: Инициализирован")
+        # Создание папок, если они не существуют
+        os.makedirs(temp_folder, exist_ok=True)
+        os.makedirs(output_folder, exist_ok=True)
+        
+        # Инициализация сервисов
+        self.download_manager = DownloadManager(temp_folder)
+        
+        # Проверка ключа OpenAI перед передачей
+        if not openai_api_key or openai_api_key == "OPENAI_API_KEY":
+            logger.error("Некорректный ключ OpenAI API")
+            raise ValueError("Некорректный ключ OpenAI API")
+        
+        logger.info(f"Инициализация транскрибера с ключом OpenAI: {openai_api_key[:10]}...")    
+        self.transcriber = WhisperTranscriber(openai_api_key)
+        
+        if use_claude:
+            logger.info(f"Инициализация генератора контента с Claude API")
+            self.content_generator = ContentGenerator(
+                api_key=openai_api_key,
+                use_claude=True,
+                claude_api_key=claude_api_key
+            )
+        else:
+            logger.info(f"Инициализация генератора контента с OpenAI API")
+            self.content_generator = ContentGenerator(
+                api_key=openai_api_key,
+                use_claude=False
+            )
+        
+        # Инициализация приложения
+        self.application = Application.builder().token(token).build()
+        
+        # Регистрация обработчиков
+        self.register_handlers()
     
-    async def start(self):
-        """Запускает бота."""
+    def register_handlers(self):
+        """Регистрация обработчиков сообщений"""
+        self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(CommandHandler("help", self.help_command))
+        
+        # Обработчик видео сообщений
+        self.application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, self.process_video))
+        
+        # Обработчик для любых других сообщений
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.echo))
+    
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Обработчик команды /start"""
+        user = update.effective_user
+        await update.message.reply_text(
+            f"Привет, {user.first_name}! Я бот для преобразования видео в текстовые посты.\n\n"
+            f"Отправьте мне видеофайл, и я создам готовый пост на основе его содержания."
+        )
+    
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Обработчик команды /help"""
+        await update.message.reply_text(
+            "Как пользоваться ботом:\n\n"
+            "1. Отправьте видеофайл (до 20 МБ) или ссылку на YouTube видео\n"
+            "2. Дождитесь обработки (может занять некоторое время в зависимости от длины видео)\n"
+            "3. Получите готовый текстовый пост\n\n"
+            "Поддерживаемые форматы:\n"
+            "- Видеофайлы: MP4, MOV, AVI\n"
+            "- YouTube: любые публичные видео с доступными субтитрами\n\n"
+            "Команды:\n"
+            "/start - Начать работу с ботом\n"
+            "/help - Показать справку"
+        )
+    
+    async def process_video(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Обработчик получения видеофайла"""
         try:
-            application = Application.builder().token(self.bot_token).build()
+            # Уведомление о начале обработки
+            message = await update.message.reply_text("Получен видеофайл. Начинаю обработку...")
             
-            # Добавляем обработчики команд
-            application.add_handler(CommandHandler("start", self.cmd_start))
-            application.add_handler(CommandHandler("help", self.cmd_help))
+            # Получение файла
+            if update.message.video:
+                file = await update.message.video.get_file()
+            else:
+                file = await update.message.document.get_file()
             
-            # Обработчик видео файлов
-            application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, self.handle_video))
+            # Скачивание видео
+            await message.edit_text("Скачиваю видео...")
+            video_path = await self.download_manager.download_file(file)
             
-            # Обработчик видео файлов, отправленных как документы
-            application.add_handler(MessageHandler(
-                filters.Document.MimeType("video/mp4") | 
-                filters.Document.MimeType("video/quicktime") | 
-                filters.Document.MimeType("video/x-matroska") | 
-                filters.Document.MimeType("video/webm"), 
-                self.handle_video_document
-            ))
+            # Транскрипция видео
+            await message.edit_text("Расшифровываю речь из видео... Это может занять некоторое время.")
+            transcription = await self.transcriber.transcribe(video_path)
             
-            # Обработчик YouTube ссылок
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+            # Создание текстового поста
+            await message.edit_text("Генерирую пост на основе расшифровки...")
+            post_content = await self.content_generator.generate_post(transcription)
             
-            # Запускаем бота
-            await application.initialize()
-            await application.start()
-            await application.updater.start_polling()
+            # Отправка результата
+            await message.edit_text("Готово! Вот ваш пост:")
+            await update.message.reply_text(post_content)
             
-            logger.info("Бот запущен и ожидает сообщений")
-            
-            # Держим бота запущенным
-            self.is_running = True
-            while self.is_running:
-                await asyncio.sleep(1)
-                
-            await application.updater.stop()
-            await application.stop()
-            await application.shutdown()
+            # Очистка временных файлов
+            os.remove(video_path)
             
         except Exception as e:
-            logger.error(f"Ошибка при запуске бота: {e}")
-            raise
+            logger.error(f"Ошибка при обработке видео: {e}")
+            await update.message.reply_text(f"Произошла ошибка при обработке видео: {str(e)}")
     
-    async def stop(self):
-        """Останавливает бота."""
-        self.is_running = False
-        logger.info("Получена команда на остановку бота")
-    
-    async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обрабатывает команду /start."""
-        if not self._is_user_authorized(update):
-            return
-        
-        await update.message.reply_text(
-            "👋 Привет! Я бот для саммаризации видео.\n\n"
-            "📤 Отправь мне видео файл или ссылку на YouTube видео, и я сделаю его краткое содержание.\n\n"
-            "🔍 Для YouTube видео я использую субтитры, для обычных видео - анализирую аудиодорожку.\n\n"
-            "⚡️ Для получения помощи используй команду /help"
-        )
-    
-    async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обрабатывает команду /help."""
-        if not self._is_user_authorized(update):
-            return
-        
-        await update.message.reply_text(
-            "📚 Помощь по использованию бота:\n\n"
-            "1. Для анализа YouTube видео - просто отправь ссылку\n"
-            "2. Для анализа видеофайла - отправь его как видео или документ\n\n"
-            "⚠️ Обратите внимание:\n"
-            "- Размер видеофайла не должен превышать 20 МБ\n"
-            "- Обработка может занять некоторое время, в зависимости от длины видео\n"
-            "- Для YouTube видео необходимы субтитры (автоматические также поддерживаются)\n\n"
-            "Если возникли проблемы, свяжитесь с разработчиком."
-        )
-    
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обрабатывает текстовые сообщения для извлечения YouTube URL."""
-        if not self._is_user_authorized(update):
-            return
-        
+    async def echo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Обработчик текстовых сообщений"""
         message_text = update.message.text
         
-        # Проверяем, есть ли в сообщении YouTube ссылка
+        # Проверяем, является ли сообщение ссылкой на YouTube
         youtube_match = re.search(YOUTUBE_URL_PATTERN, message_text)
         if youtube_match:
             youtube_url = youtube_match.group(0)
+            logger.info(f"Обнаружена YouTube ссылка: {youtube_url}")
             
-            # Отправляем сообщение о начале обработки
-            await update.message.reply_text(f"🔍 Начинаю обработку YouTube видео: {youtube_url}\nПожалуйста, подождите...")
+            # Извлекаем видео ID
+            video_id = youtube_match.group(6)
+            logger.info(f"Извлечен ID видео: {video_id}")
+            
+            # Очищаем URL от лишних параметров
+            clean_url = f"https://www.youtube.com/watch?v={video_id}"
+            logger.info(f"Очищенный URL: {clean_url}")
+            
+            message = await update.message.reply_text(f"🔍 Начинаю обработку YouTube видео: {clean_url}\nПожалуйста, подождите...")
             
             try:
-                # Обрабатываем YouTube ссылку
-                result = await self.video_processor.process_youtube_url(youtube_url)
+                from .video_processor import VideoProcessor
                 
-                # Отправляем результат
-                await self._send_video_summary(update, result)
+                # Создаем экземпляр VideoProcessor
+                video_processor = VideoProcessor(self.temp_folder)
                 
+                # Обрабатываем YouTube URL
+                await message.edit_text("⏳ Получаю субтитры для видео...")
+                video_data = await video_processor.process_youtube_url(clean_url)
+                
+                transcription = video_data.get('transcription')
+                
+                # Если транскрипция получена успешно, генерируем пост
+                if transcription:
+                    await message.edit_text("⏳ Генерирую пост на основе субтитров...")
+                    post_content = await self.content_generator.generate_post(transcription)
+                    
+                    # Отправка результата
+                    await message.edit_text("✅ Готово! Вот ваш пост:")
+                    await update.message.reply_text(post_content)
+                else:
+                    await message.edit_text("❌ Не удалось получить субтитры для данного видео.")
             except Exception as e:
-                logger.error(f"Ошибка при обработке YouTube URL: {e}")
-                await update.message.reply_text(f"❌ Не удалось обработать YouTube видео: {str(e)}")
-    
-    async def handle_video(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обрабатывает видео, отправленные как видео."""
-        if not self._is_user_authorized(update):
-            return
-        
-        await update.message.reply_text("🎬 Получил видео! Начинаю обработку, это может занять некоторое время...")
-        
-        try:
-            # Скачиваем видео
-            video_file = await update.message.video.get_file()
-            
-            # Создаем временный файл для видео
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
-                video_path = tmp_file.name
-            
-            # Загружаем видео во временный файл
-            await video_file.download_to_drive(video_path)
-            logger.info(f"Видео загружено в {video_path}")
-            
-            # Обрабатываем видео
-            result = await self.video_processor.process_video_file(video_path)
-            
-            # Отправляем результат
-            await self._send_video_summary(update, result)
-            
-            # Удаляем временный файл
-            os.remove(video_path)
-            
-        except Exception as e:
-            logger.error(f"Ошибка при обработке видео: {e}")
-            await update.message.reply_text(f"❌ Не удалось обработать видео: {str(e)}")
-    
-    async def handle_video_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обрабатывает видео, отправленные как документы."""
-        if not self._is_user_authorized(update):
-            return
-        
-        await update.message.reply_text("🎬 Получил видео! Начинаю обработку, это может занять некоторое время...")
-        
-        try:
-            # Скачиваем видео
-            video_file = await update.message.document.get_file()
-            
-            # Создаем временный файл для видео
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
-                video_path = tmp_file.name
-            
-            # Загружаем видео во временный файл
-            await video_file.download_to_drive(video_path)
-            logger.info(f"Видео загружено в {video_path}")
-            
-            # Обрабатываем видео
-            result = await self.video_processor.process_video_file(video_path)
-            
-            # Отправляем результат
-            await self._send_video_summary(update, result)
-            
-            # Удаляем временный файл
-            os.remove(video_path)
-            
-        except Exception as e:
-            logger.error(f"Ошибка при обработке видео: {e}")
-            await update.message.reply_text(f"❌ Не удалось обработать видео: {str(e)}")
-    
-    async def _send_video_summary(self, update: Update, result: Dict[str, Any]):
-        """
-        Отправляет саммари и транскрипцию видео.
-        
-        Args:
-            update (Update): Объект обновления Telegram
-            result (Dict[str, Any]): Результат обработки видео
-        """
-        summary = result.get("summary", "")
-        transcript = result.get("transcript", "")
-        
-        # Отправляем саммари
-        await update.message.reply_text(f"📝 Вот саммари видео:\n\n{summary}")
-        
-        # Если транскрипция слишком длинная, отправляем её частями
-        if len(transcript) > 4000:
-            parts = [transcript[i:i+4000] for i in range(0, len(transcript), 4000)]
-            for i, part in enumerate(parts):
-                await update.message.reply_text(f"📄 Транскрипция (часть {i+1}/{len(parts)}):\n\n{part}")
+                logger.error(f"Ошибка при обработке YouTube URL: {e}", exc_info=True)
+                await message.edit_text(f"❌ Не удалось обработать YouTube видео: {str(e)}")
+                
         else:
-            await update.message.reply_text(f"📄 Полная транскрипция:\n\n{transcript}")
+            await update.message.reply_text(
+                "Пожалуйста, отправьте мне видеофайл или ссылку на YouTube видео для обработки.\n"
+                "Используйте /help для получения инструкций."
+            )
     
-    def _is_user_authorized(self, update: Update) -> bool:
-        """
-        Проверяет, авторизован ли пользователь для использования бота.
+    async def start(self):
+        """Запуск бота"""
+        logger.info("Запуск Telegram бота...")
+        await self.application.initialize()
+        await self.application.start()
+        await self.application.updater.start_polling()
         
-        Args:
-            update (Update): Объект обновления Telegram
-            
-        Returns:
-            bool: True, если пользователь авторизован, иначе False
-        """
-        user_id = update.effective_user.id
-        if not self.authorized_user_ids or user_id in self.authorized_user_ids:
-            return True
-        
-        logger.warning(f"Неавторизованная попытка доступа от пользователя {user_id}")
-        update.message.reply_text("⛔ У вас нет доступа к этому боту.")
-        return False 
+        try:
+            # Ожидание нажатия Ctrl+C для завершения
+            await asyncio.Event().wait()
+        finally:
+            # Корректное завершение работы бота
+            await self.application.stop()
+            await self.application.shutdown() 
