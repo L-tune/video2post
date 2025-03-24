@@ -11,6 +11,24 @@ from .youtube_subtitles import YouTubeSubtitlesExtractor
 
 logger = logging.getLogger(__name__)
 
+# Создаем кастомный фильтр для YouTube ссылок
+def youtube_link_filter(update):
+    """
+    Фильтр для определения YouTube ссылок.
+    
+    Args:
+        update: Обновление от Telegram
+        
+    Returns:
+        bool: True, если сообщение содержит YouTube ссылку
+    """
+    if not update.message or not update.message.text:
+        return False
+        
+    # Регулярное выражение для поиска YouTube ссылок
+    youtube_pattern = r'(https?://)?(www\.)?(youtube\.com|youtu\.be|youtube\.com/shorts)/[\w\-?=&./%]+'
+    return bool(re.search(youtube_pattern, update.message.text))
+
 class TelegramBot:
     """Класс Telegram бота для обработки видео и генерации постов"""
     
@@ -91,28 +109,12 @@ class TelegramBot:
         # Обработчик видео сообщений
         self.application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, self.process_video))
         
-        # Обработчик для YouTube ссылок
-        self.application.add_handler(MessageHandler(filters.TEXT & self.youtube_link_filter, self.process_youtube_link))
+        # Обработчик для YouTube ссылок с использованием кастомного фильтра
+        # Важно: используем правильный способ объявления фильтра
+        self.application.add_handler(MessageHandler(youtube_link_filter, self.process_youtube_link))
         
-        # Обработчик для любых других сообщений
+        # Обработчик для любых других текстовых сообщений
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.echo))
-    
-    def youtube_link_filter(self, message):
-        """
-        Фильтр для определения YouTube ссылок.
-        
-        Args:
-            message: Сообщение от пользователя
-            
-        Returns:
-            bool: True, если сообщение содержит YouTube ссылку
-        """
-        if not message.text:
-            return False
-            
-        # Регулярное выражение для поиска YouTube ссылок
-        youtube_pattern = r'(https?://)?(www\.)?(youtube\.com|youtu\.be|youtube\.com/shorts)/[\w\-?=&./%]+'
-        return bool(re.search(youtube_pattern, message.text))
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Обработчик команды /start"""
