@@ -12,4 +12,3 @@ Pillow==10.2.0
 httpx>=0.24.1
 httpcore>=0.17.0
 youtube-transcript-api==0.6.1
-yt-dlp==2023.12.30

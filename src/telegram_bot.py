@@ -173,10 +173,9 @@ class TelegramBot:
                 # Получаем proxy из переменных среды
                 youtube_proxy = os.getenv("YOUTUBE_PROXY")
                 
-                # Создаем экземпляр VideoProcessor с передачей ключа API и прокси
+                # Создаем экземпляр VideoProcessor с передачей прокси
                 video_processor = VideoProcessor(
                     temp_folder=self.temp_folder,
-                    openai_api_key=self.openai_api_key,
                     proxy=youtube_proxy
                 )
                 
@@ -184,28 +183,26 @@ class TelegramBot:
                     logger.info(f"Используется прокси для YouTube: {youtube_proxy[:10]}...")
                 
                 # Обрабатываем YouTube URL
-                await message.edit_text("⏳ Получаю информацию о видео...")
+                await message.edit_text("⏳ Получаю субтитры для видео...")
                 video_data = await video_processor.process_youtube_url(clean_url)
                 
                 # Информация о методе получения данных
                 source = ""
                 if "source" in video_data and video_data["source"] == "proxy":
                     source = " (через прокси)"
-                elif "download_method" in video_data:
-                    source = " (через Whisper)"
                 
                 transcription = video_data.get('transcription')
                 
                 # Если транскрипция получена успешно, генерируем пост
                 if transcription:
-                    await message.edit_text(f"⏳ Генерирую пост на основе транскрипции{source}...")
+                    await message.edit_text(f"⏳ Генерирую пост на основе субтитров{source}...")
                     post_content = await self.content_generator.generate_post(transcription)
                     
                     # Отправка результата
                     await message.edit_text("✅ Готово! Вот ваш пост:")
                     await update.message.reply_text(post_content)
                 else:
-                    await message.edit_text("❌ Не удалось получить транскрипцию для данного видео.")
+                    await message.edit_text("❌ Не удалось получить субтитры для данного видео.")
             except Exception as e:
                 logger.error(f"Ошибка при обработке YouTube URL: {e}", exc_info=True)
                 await message.edit_text(f"❌ Не удалось обработать YouTube видео: {str(e)}")
