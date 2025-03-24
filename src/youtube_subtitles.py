@@ -9,139 +9,27 @@ import subprocess
 import time
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from typing import Dict, Any, Optional, List, Tuple
+from src.youtube_api import YouTubeAPI
 
 logger = logging.getLogger(__name__)
 
 class YouTubeSubtitlesExtractor:
     """Класс для извлечения субтитров из YouTube видео."""
     
-    def __init__(self, proxy: str = None, timeout: int = 30):
+    def __init__(self, api_key: str, timeout: int = 30):
         """
         Инициализация экстрактора субтитров.
         
         Args:
-            proxy (str, optional): Прокси-сервер для запросов к YouTube API (формат: host:port:username:password)
+            api_key (str): API ключ от Google Cloud Console
             timeout (int, optional): Таймаут для запросов в секундах
         """
-        self.proxy = proxy
+        self.api_key = api_key
         self.timeout = timeout
-        self.proxy_dict = self._prepare_proxy_dict() if proxy else None
-        
-        if proxy:
-            logger.info(f"YouTubeSubtitlesExtractor: Инициализирован с прокси (таймаут: {timeout}с)")
-        else:
-            logger.info(f"YouTubeSubtitlesExtractor: Инициализирован (таймаут: {timeout}с)")
+        self.youtube_api = YouTubeAPI(api_key)
+        logger.info(f"YouTubeSubtitlesExtractor: Инициализирован с API ключом (таймаут: {timeout}с)")
 
-    def _prepare_proxy_dict(self) -> Dict[str, str]:
-        """
-        Преобразует строку прокси в словарь для использования в запросах.
-        
-        Returns:
-            Dict[str, str]: Словарь с настройками прокси
-        """
-        try:
-            parts = self.proxy.split(':')
-            if len(parts) == 4:
-                host, port, username, password = parts
-                # Для HTTP/HTTPS запросов и yt-dlp используем один и тот же правильный формат
-                proxy_url = f"http://{username}:{password}@{host}:{port}"
-                
-                return {
-                    'http': proxy_url,
-                    'https': proxy_url,
-                    'ytdlp': proxy_url
-                }
-            elif len(parts) == 2:
-                host, port = parts
-                proxy_url = f"http://{host}:{port}"
-                
-                return {
-                    'http': proxy_url,
-                    'https': proxy_url,
-                    'ytdlp': proxy_url
-                }
-            else:
-                logger.warning(f"Неверный формат прокси: {self.proxy}, должен быть host:port или host:port:username:password")
-                return None
-        except Exception as e:
-            logger.error(f"Ошибка при подготовке прокси: {e}")
-            return None
-
-    def extract_video_id(self, youtube_url):
-        """
-        Извлекает ID видео из YouTube URL.
-        
-        Args:
-            youtube_url (str): URL YouTube видео
-            
-        Returns:
-            str: ID видео или None, если ID не найден
-        """
-        # Шаблоны для разных форматов YouTube URL
-        patterns = [
-            r'(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\?\/]+)',
-            r'youtube\.com\/shorts\/([^&\?\/]+)'
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, youtube_url)
-            if match:
-                return match.group(1)
-        
-        return None
-    
-    async def get_subtitles(self, youtube_url: str) -> Dict[str, Any]:
-        """
-        Получает субтитры из YouTube видео.
-        
-        Args:
-            youtube_url (str): URL YouTube видео
-            
-        Returns:
-            Dict[str, Any]: Словарь с результатами:
-                - transcript: Полный текст субтитров
-                - video_title: Название видео
-                - video_id: ID видео
-        """
-        try:
-            # Извлекаем ID видео из URL
-            video_id = self._extract_video_id(youtube_url)
-            if not video_id:
-                logger.error(f"Не удалось извлечь ID видео из URL: {youtube_url}")
-                raise ValueError(f"Неверная ссылка на YouTube видео: {youtube_url}")
-            
-            logger.info(f"Получен ID видео: {video_id}")
-            
-            # Получаем информацию о видео
-            video_info = await self._get_video_info(video_id)
-            video_title = video_info.get("title", "")
-            
-            logger.info(f"Название видео: {video_title}")
-            
-            # Получаем субтитры
-            transcript_text = await self._get_transcript(video_id)
-            
-            if not transcript_text:
-                logger.warning(f"Не удалось получить субтитры для видео {video_id}")
-                return {
-                    "transcript": "",
-                    "video_title": video_title,
-                    "video_id": video_id
-                }
-            
-            logger.info(f"Получены субтитры длиной {len(transcript_text)} символов")
-            
-            return {
-                "transcript": transcript_text,
-                "video_title": video_title,
-                "video_id": video_id
-            }
-            
-        except Exception as e:
-            logger.error(f"Ошибка при получении субтитров: {e}")
-            raise Exception(f"Не удалось получить субтитры: {str(e)}")
-    
-    def _extract_video_id(self, youtube_url: str) -> str:
+    def extract_video_id(self, youtube_url: str) -> str:
         """
         Извлекает ID видео из YouTube URL.
         
@@ -165,6 +53,91 @@ class YouTubeSubtitlesExtractor:
             logger.error(f"Ошибка при извлечении ID видео: {e}")
             return ""
     
+    async def get_subtitles(self, youtube_url: str) -> Dict[str, Any]:
+        """
+        Получает субтитры из YouTube видео.
+        
+        Args:
+            youtube_url (str): URL YouTube видео
+            
+        Returns:
+            Dict[str, Any]: Словарь с результатами:
+                - transcript: Полный текст субтитров
+                - video_title: Название видео
+                - video_id: ID видео
+        """
+        try:
+            # Извлекаем ID видео из URL
+            video_id = self.extract_video_id(youtube_url)
+            if not video_id:
+                logger.error(f"Не удалось извлечь ID видео из URL: {youtube_url}")
+                raise ValueError(f"Неверная ссылка на YouTube видео: {youtube_url}")
+            
+            logger.info(f"Получен ID видео: {video_id}")
+            
+            # Получаем информацию о видео через API
+            video_info = self.youtube_api.get_video_info(video_id)
+            video_title = video_info.get("title", "")
+            
+            logger.info(f"Название видео: {video_title}")
+            
+            # Получаем субтитры через YouTube Transcript API
+            try:
+                transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ru', 'en'])
+                transcript_text = " ".join([item['text'] for item in transcript_list])
+                logger.info(f"Получены субтитры длиной {len(transcript_text)} символов")
+            except Exception as e:
+                logger.warning(f"Не удалось получить субтитры через YouTube Transcript API: {e}")
+                transcript_text = ""
+            
+            return {
+                "transcript": transcript_text,
+                "video_title": video_title,
+                "video_id": video_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении субтитров: {e}")
+            raise Exception(f"Не удалось получить субтитры: {str(e)}")
+    
+    def _prepare_proxy_dict(self, proxy: str) -> Dict[str, str]:
+        """
+        Преобразует строку прокси в словарь для использования в запросах.
+        
+        Args:
+            proxy (str): Строка прокси
+            
+        Returns:
+            Dict[str, str]: Словарь с настройками прокси
+        """
+        try:
+            parts = proxy.split(':')
+            if len(parts) == 4:
+                host, port, username, password = parts
+                # Для HTTP/HTTPS запросов и yt-dlp используем один и тот же правильный формат
+                proxy_url = f"http://{username}:{password}@{host}:{port}"
+                
+                return {
+                    'http': proxy_url,
+                    'https': proxy_url,
+                    'ytdlp': proxy_url
+                }
+            elif len(parts) == 2:
+                host, port = parts
+                proxy_url = f"http://{host}:{port}"
+                
+                return {
+                    'http': proxy_url,
+                    'https': proxy_url,
+                    'ytdlp': proxy_url
+                }
+            else:
+                logger.warning(f"Неверный формат прокси: {proxy}, должен быть host:port или host:port:username:password")
+                return None
+        except Exception as e:
+            logger.error(f"Ошибка при подготовке прокси: {e}")
+            return None
+
     async def _get_video_info(self, video_id: str) -> Dict[str, Any]:
         """
         Получает информацию о видео с помощью yt-dlp.

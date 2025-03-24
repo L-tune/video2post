@@ -216,9 +216,17 @@ class TelegramBot:
     async def start(self):
         """Запуск бота"""
         logger.info("Запуск Telegram бота...")
+        
+        # Сбрасываем webhook и очищаем предыдущие обновления
+        try:
+            await self.application.bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Webhook сброшен, предыдущие обновления очищены")
+        except Exception as e:
+            logger.warning(f"Не удалось сбросить webhook: {e}")
+        
         await self.application.initialize()
         await self.application.start()
-        await self.application.updater.start_polling()
+        await self.application.updater.start_polling(drop_pending_updates=True)
         
         try:
             # Ожидание нажатия Ctrl+C для завершения
