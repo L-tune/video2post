@@ -279,10 +279,173 @@ class YouTubeSubtitlesExtractor:
                 lambda: self._get_transcript_sync(video_id)
             )
             
+            # Если не удалось получить субтитры через YouTube API, пробуем через yt-dlp
+            if not transcript:
+                logger.info(f"Не удалось получить субтитры через YouTube API, пробуем через yt-dlp")
+                transcript = await self._get_transcript_via_ytdlp(video_id)
+                if transcript:
+                    logger.info(f"Успешно получены субтитры через yt-dlp, длина: {len(transcript)} символов")
+            
             return transcript
             
         except Exception as e:
             logger.error(f"Ошибка при получении субтитров: {e}")
+            return ""
+            
+    async def _get_transcript_via_ytdlp(self, video_id: str) -> str:
+        """
+        Получает субтитры через yt-dlp как запасной вариант.
+        
+        Args:
+            video_id (str): ID видео
+            
+        Returns:
+            str: Текст субтитров или пустая строка в случае ошибки
+        """
+        try:
+            # Сначала пробуем с прокси, если он указан
+            if self.proxy_dict:
+                try:
+                    proxy_url = self.proxy_dict.get('ytdlp')
+                    logger.info(f"Пробуем получить субтитры через yt-dlp с прокси: {proxy_url}")
+                    
+                    # Команда для получения субтитров через yt-dlp с прокси
+                    cmd = [
+                        "yt-dlp",
+                        f"https://www.youtube.com/watch?v={video_id}",
+                        "--write-auto-sub",
+                        "--write-sub",
+                        "--sub-lang", "ru,en",
+                        "--skip-download",
+                        "--proxy", proxy_url,
+                        "--get-filename", "--output", "%(id)s.%(ext)s"
+                    ]
+                    
+                    # Запускаем yt-dlp с прокси
+                    logger.info(f"Выполняем команду yt-dlp: {' '.join(cmd)}")
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    
+                    stdout, stderr = await proc.communicate()
+                    logger.info(f"yt-dlp вернул код: {proc.returncode}, stdout: {stdout.decode()}, stderr: {stderr.decode()}")
+                    
+                    if proc.returncode == 0:
+                        transcript = self._process_ytdlp_subtitles(video_id)
+                        if transcript:
+                            return transcript
+                except Exception as e:
+                    logger.error(f"Ошибка при получении субтитров через yt-dlp с прокси: {type(e).__name__}: {str(e)}")
+            
+            # Если с прокси не получилось или его нет, пробуем без прокси
+            logger.info(f"Пробуем получить субтитры через yt-dlp без прокси")
+            cmd = [
+                "yt-dlp",
+                f"https://www.youtube.com/watch?v={video_id}",
+                "--write-auto-sub",
+                "--write-sub",
+                "--sub-lang", "ru,en",
+                "--skip-download",
+                "--get-filename", "--output", "%(id)s.%(ext)s"
+            ]
+            
+            logger.info(f"Выполняем команду yt-dlp: {' '.join(cmd)}")
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await proc.communicate()
+            logger.info(f"yt-dlp вернул код: {proc.returncode}, stdout: {stdout.decode()}, stderr: {stderr.decode()}")
+            
+            if proc.returncode == 0:
+                transcript = self._process_ytdlp_subtitles(video_id)
+                if transcript:
+                    return transcript
+            
+            return ""
+        except Exception as e:
+            logger.error(f"Ошибка при получении субтитров через yt-dlp: {type(e).__name__}: {str(e)}")
+            return ""
+            
+    def _process_ytdlp_subtitles(self, video_id: str) -> str:
+        """
+        Обрабатывает субтитры, загруженные через yt-dlp.
+        
+        Args:
+            video_id (str): ID видео
+            
+        Returns:
+            str: Текст субтитров или пустая строка в случае ошибки
+        """
+        try:
+            # Ищем файлы субтитров, загруженные yt-dlp
+            subtitle_files = []
+            for filename in os.listdir('.'):
+                if filename.startswith(video_id) and (filename.endswith('.vtt') or filename.endswith('.srt')):
+                    subtitle_files.append(filename)
+            
+            logger.info(f"Найдено {len(subtitle_files)} файлов субтитров: {subtitle_files}")
+            
+            if not subtitle_files:
+                return ""
+            
+            # Приоритетные расширения и языки
+            priority_lang = ['ru', 'en']
+            
+            # Сначала ищем русские субтитры, затем английские
+            for lang in priority_lang:
+                for filename in subtitle_files:
+                    if f".{lang}." in filename:
+                        logger.info(f"Обрабатываем файл субтитров: {filename}")
+                        return self._parse_subtitle_file(filename)
+            
+            # Если не нашли субтитры с приоритетными языками, берем первый попавшийся
+            logger.info(f"Не найдены субтитры на приоритетных языках, используем первый файл: {subtitle_files[0]}")
+            return self._parse_subtitle_file(subtitle_files[0])
+            
+        except Exception as e:
+            logger.error(f"Ошибка при обработке файлов субтитров: {type(e).__name__}: {str(e)}")
+            return ""
+            
+    def _parse_subtitle_file(self, filepath: str) -> str:
+        """
+        Парсит файл субтитров в текст.
+        
+        Args:
+            filepath (str): Путь к файлу субтитров
+            
+        Returns:
+            str: Текст субтитров или пустая строка в случае ошибки
+        """
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Удаляем файл после чтения
+            try:
+                os.remove(filepath)
+                logger.info(f"Удален файл субтитров: {filepath}")
+            except:
+                pass
+            
+            # Парсинг VTT/SRT файла
+            # Удаляем метаданные и временные метки
+            lines = []
+            for line in content.split('\n'):
+                # Пропускаем строки с временными метками, метаданными и пустые строки
+                if '-->' in line or line.strip() == '' or line.startswith('WEBVTT') or re.match(r'^\d+$', line.strip()):
+                    continue
+                lines.append(line.strip())
+            
+            text = ' '.join(lines)
+            return text
+            
+        except Exception as e:
+            logger.error(f"Ошибка при парсинге файла субтитров {filepath}: {type(e).__name__}: {str(e)}")
             return ""
     
     def _get_transcript_sync(self, video_id: str) -> str:
@@ -305,19 +468,29 @@ class YouTubeSubtitlesExtractor:
         try:
             # Пробуем сначала с прокси, если он указан
             if self.proxy_dict:
+                logger.info(f"Прокси настройки: {self.proxy_dict}")
                 for attempt in range(max_attempts):
                     try:
-                        logger.info(f"Получаем субтитры через прокси: {self.proxy_dict.get('http')} (попытка {attempt+1}/{max_attempts})")
+                        proxy_url = self.proxy_dict.get('http', '')
+                        logger.info(f"Получаем субтитры через прокси: {proxy_url} (попытка {attempt+1}/{max_attempts})")
+                        
                         proxy_settings = {
                             'http': self.proxy_dict.get('http'),
                             'https': self.proxy_dict.get('https')
                         }
                         
-                        transcript_list = YouTubeTranscriptApi.list_transcripts(
-                            video_id, 
-                            proxies=proxy_settings
-                        )
-                        logger.info("Получен список транскриптов через прокси")
+                        # Подробная информация о запросе
+                        logger.info(f"Детали запроса: video_id={video_id}, proxies={proxy_settings}")
+                        
+                        try:
+                            transcript_list = YouTubeTranscriptApi.list_transcripts(
+                                video_id, 
+                                proxies=proxy_settings
+                            )
+                            logger.info("Получен список транскриптов через прокси")
+                        except Exception as e:
+                            logger.error(f"Ошибка при получении списка транскриптов через прокси: {type(e).__name__}: {str(e)}")
+                            raise
                         
                         # Сначала пытаемся найти русские субтитры
                         try:
@@ -325,14 +498,28 @@ class YouTubeSubtitlesExtractor:
                             logger.info("Найдены русские субтитры через прокси")
                         except NoTranscriptFound:
                             # Если русских нет, берем английские
-                            transcript = transcript_list.find_transcript(['en'])
-                            logger.info("Найдены английские субтитры через прокси")
-                            # Переводим субтитры на русский
-                            transcript = transcript.translate('ru')
-                            logger.info("Субтитры переведены на русский через прокси")
+                            logger.info("Русские субтитры не найдены, ищем английские")
+                            try:
+                                transcript = transcript_list.find_transcript(['en'])
+                                logger.info("Найдены английские субтитры через прокси")
+                                # Переводим субтитры на русский
+                                try:
+                                    transcript = transcript.translate('ru')
+                                    logger.info("Субтитры переведены на русский через прокси")
+                                except Exception as e:
+                                    logger.error(f"Ошибка при переводе субтитров: {type(e).__name__}: {str(e)}")
+                                    raise
+                            except NoTranscriptFound as e:
+                                logger.error(f"Не найдены ни русские, ни английские субтитры: {str(e)}")
+                                raise
                         
                         # Получаем текст субтитров
-                        transcript_data = transcript.fetch(proxies=proxy_settings)
+                        try:
+                            transcript_data = transcript.fetch(proxies=proxy_settings)
+                            logger.info(f"Получены данные субтитров через прокси: {len(transcript_data)} сегментов")
+                        except Exception as e:
+                            logger.error(f"Ошибка при получении данных субтитров через прокси: {type(e).__name__}: {str(e)}")
+                            raise
                         
                         # Объединяем все фрагменты субтитров в один текст
                         transcript_text = " ".join([item['text'] for item in transcript_data])
@@ -340,7 +527,7 @@ class YouTubeSubtitlesExtractor:
                         return transcript_text
                         
                     except Exception as e:
-                        logger.warning(f"Не удалось получить субтитры через прокси (попытка {attempt+1}/{max_attempts}): {e}")
+                        logger.warning(f"Не удалось получить субтитры через прокси (попытка {attempt+1}/{max_attempts}): {type(e).__name__}: {str(e)}")
                         if attempt < max_attempts - 1:
                             logger.info(f"Повторная попытка через {retry_delay} секунд...")
                             time.sleep(retry_delay)
@@ -348,11 +535,17 @@ class YouTubeSubtitlesExtractor:
                             logger.warning(f"Исчерпаны все попытки получения через прокси. Пробуем без прокси.")
             
             # Если прокси не указан или все попытки не удались, пробуем без прокси
+            logger.info(f"Пробуем получить субтитры без прокси")
             for attempt in range(max_attempts):
                 try:
                     logger.info(f"Получаем субтитры без прокси (попытка {attempt+1}/{max_attempts})")
-                    transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-                    logger.info("Получен список транскриптов без прокси")
+                    
+                    try:
+                        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                        logger.info("Получен список транскриптов без прокси")
+                    except Exception as e:
+                        logger.error(f"Ошибка при получении списка транскриптов без прокси: {type(e).__name__}: {str(e)}")
+                        raise
                     
                     # Сначала пытаемся найти русские субтитры
                     try:
@@ -360,14 +553,28 @@ class YouTubeSubtitlesExtractor:
                         logger.info("Найдены русские субтитры")
                     except NoTranscriptFound:
                         # Если русских нет, берем английские
-                        transcript = transcript_list.find_transcript(['en'])
-                        logger.info("Найдены английские субтитры")
-                        # Переводим субтитры на русский
-                        transcript = transcript.translate('ru')
-                        logger.info("Субтитры переведены на русский")
+                        logger.info("Русские субтитры не найдены, ищем английские")
+                        try:
+                            transcript = transcript_list.find_transcript(['en'])
+                            logger.info("Найдены английские субтитры")
+                            # Переводим субтитры на русский
+                            try:
+                                transcript = transcript.translate('ru')
+                                logger.info("Субтитры переведены на русский")
+                            except Exception as e:
+                                logger.error(f"Ошибка при переводе субтитров: {type(e).__name__}: {str(e)}")
+                                raise
+                        except NoTranscriptFound as e:
+                            logger.error(f"Не найдены ни русские, ни английские субтитры: {str(e)}")
+                            raise
                     
                     # Получаем текст субтитров
-                    transcript_data = transcript.fetch()
+                    try:
+                        transcript_data = transcript.fetch()
+                        logger.info(f"Получены данные субтитров без прокси: {len(transcript_data)} сегментов")
+                    except Exception as e:
+                        logger.error(f"Ошибка при получении данных субтитров без прокси: {type(e).__name__}: {str(e)}")
+                        raise
                     
                     # Объединяем все фрагменты субтитров в один текст
                     transcript_text = " ".join([item['text'] for item in transcript_data])
@@ -375,12 +582,12 @@ class YouTubeSubtitlesExtractor:
                     return transcript_text
                     
                 except Exception as e:
-                    logger.warning(f"Не удалось получить субтитры без прокси (попытка {attempt+1}/{max_attempts}): {e}")
+                    logger.warning(f"Не удалось получить субтитры без прокси (попытка {attempt+1}/{max_attempts}): {type(e).__name__}: {str(e)}")
                     if attempt < max_attempts - 1:
                         logger.info(f"Повторная попытка через {retry_delay} секунд...")
                         time.sleep(retry_delay)
                     else:
-                        logger.error(f"Исчерпаны все попытки. Не удалось получить субтитры.")
+                        logger.error(f"Исчерпаны все попытки. Не удалось получить субтитры: {type(e).__name__}: {str(e)}")
             
             # Если все попытки не удались
             return ""
@@ -392,5 +599,5 @@ class YouTubeSubtitlesExtractor:
             logger.warning(f"Не найдены субтитры для видео {video_id}")
             return ""
         except Exception as e:
-            logger.error(f"Ошибка при получении субтитров: {e}")
+            logger.error(f"Ошибка при получении субтитров: {type(e).__name__}: {str(e)}")
             return "" 
