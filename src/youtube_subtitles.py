@@ -116,31 +116,59 @@ class YouTubeSubtitlesExtractor:
             # Получение списка доступных субтитров
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             
-            # Пытаемся получить субтитры на предпочтительном языке
+            # Сначала пытаемся получить обычные субтитры
             try:
-                transcript = transcript_list.find_transcript([preferred_lang])
-            except NoTranscriptFound:
-                # Если субтитры на предпочтительном языке не найдены,
-                # пытаемся получить субтитры на английском
+                # Пытаемся получить субтитры на предпочтительном языке
                 try:
-                    transcript = transcript_list.find_transcript(['en'])
+                    transcript = transcript_list.find_transcript([preferred_lang])
                 except NoTranscriptFound:
-                    # Если субтитры на английском не найдены,
-                    # берем первый доступный язык
-                    transcript = transcript_list.find_transcript([])
-            
-            # Получение текста субтитров
-            transcript_data = transcript.fetch()
+                    # Если субтитры на предпочтительном языке не найдены,
+                    # пытаемся получить субтитры на английском
+                    try:
+                        transcript = transcript_list.find_transcript(['en'])
+                    except NoTranscriptFound:
+                        # Если субтитры на английском не найдены,
+                        # берем первый доступный язык
+                        transcript = transcript_list.find_transcript([])
+                
+                # Получение текста субтитров
+                transcript_data = transcript.fetch()
+                logger.info(f"Получены обычные субтитры для видео {video_id}")
+                
+            except (TranscriptsDisabled, NoTranscriptFound) as e:
+                logger.warning(f"Обычные субтитры недоступны: {str(e)}. Пробуем получить автоматически сгенерированные.")
+                
+                # Попытка получить автоматически сгенерированные субтитры
+                try:
+                    # Сначала пытаемся на русском (a.ru)
+                    try:
+                        transcript = transcript_list.find_generated_transcript([f"a.{preferred_lang}"])
+                    except NoTranscriptFound:
+                        # Затем на английском (a.en)
+                        try:
+                            transcript = transcript_list.find_generated_transcript(["a.en"])
+                        except NoTranscriptFound:
+                            # Пробуем найти любые автосубтитры
+                            for t in transcript_list:
+                                if t.is_generated:
+                                    transcript = t
+                                    break
+                            else:
+                                raise NoTranscriptFound("Не найдены ни обычные, ни автоматически сгенерированные субтитры")
+                    
+                    # Получение текста автогенерированных субтитров
+                    transcript_data = transcript.fetch()
+                    logger.info(f"Получены автоматически сгенерированные субтитры для видео {video_id}")
+                    
+                except Exception as auto_e:
+                    logger.error(f"Ошибка при получении автогенерированных субтитров: {auto_e}")
+                    raise Exception("Субтитры для этого видео недоступны (ни обычные, ни автогенерированные)")
             
             # Формирование полного текста из субтитров
             full_text = ' '.join([item['text'] for item in transcript_data])
             
             return full_text
             
-        except TranscriptsDisabled:
-            raise Exception("Субтитры для этого видео отключены")
-        except NoTranscriptFound:
-            raise Exception("Субтитры для этого видео не найдены")
         except Exception as e:
             logger.error(f"Ошибка при получении субтитров: {e}")
             raise
