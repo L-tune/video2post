@@ -1,6 +1,6 @@
-python-telegram-bot==20.5
-anthropic==0.19.1
-openai==1.68.2
+python-telegram-bot==20.11
+anthropic==0.32.0
+openai==1.68.0
 python-dotenv==1.0.0
 moviepy==1.0.3
 ffmpeg-python==0.2.0
@@ -11,4 +11,5 @@ aiohttp==3.9.3
 Pillow==10.2.0
 httpx>=0.24.1
 httpcore>=0.17.0
-youtube-transcript-api==0.6.1
+yt-dlp==2024.3.3
+youtube-transcript-api==0.6.2

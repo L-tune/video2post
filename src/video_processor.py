@@ -1,167 +1,203 @@
-import os
 import logging
-import re
-from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound, VideoUnavailable
+import os
+import tempfile
+from typing import Optional, Tuple, Dict, Any
+import subprocess
+import asyncio
+from moviepy.editor import VideoFileClip
+
+from src.youtube_subtitles import YouTubeSubtitlesExtractor
 
 logger = logging.getLogger(__name__)
 
-# Паттерн для извлечения ID видео из YouTube URL
-YOUTUBE_URL_PATTERN = r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})'
-
 class VideoProcessor:
-    """Класс для обработки видеофайлов и YouTube URL."""
+    """Класс для обработки видео файлов и получения саммари."""
     
-    def __init__(self, temp_folder, proxy=None):
+    def __init__(self, openai_api_key: str = None, temp_folder: str = None, proxy: str = None):
         """
         Инициализация процессора видео.
         
         Args:
-            temp_folder (str): Путь к временной директории для хранения файлов
+            openai_api_key (str, optional): API ключ OpenAI (необходим для саммаризации)
+            temp_folder (str, optional): Путь к временной директории для хранения файлов
             proxy (str, optional): Прокси-сервер для запросов к YouTube API (формат: http://user:pass@host:port)
         """
-        self.temp_folder = temp_folder
+        self.openai_api_key = openai_api_key
+        self.temp_folder = temp_folder or tempfile.mkdtemp()
         self.proxy = proxy
         
-        if proxy:
-            logger.info(f"Инициализирован VideoProcessor с прокси")
+        if openai_api_key:
+            from src.summarizer import VideoSummarizer
+            self.summarizer = VideoSummarizer(api_key=openai_api_key)
         else:
-            logger.info("Инициализирован VideoProcessor без прокси")
-
-    async def process_youtube_url(self, youtube_url):
+            self.summarizer = None
+        
+        self.youtube_extractor = YouTubeSubtitlesExtractor()
+        
+        logger.info("VideoProcessor: Инициализирован")
+    
+    async def process_video_file(self, video_path: str) -> Dict[str, Any]:
         """
-        Обрабатывает YouTube URL, извлекая субтитры через API или прокси.
+        Обрабатывает видеофайл и возвращает саммари и транскрипцию.
         
         Args:
-            youtube_url (str): URL видео на YouTube
+            video_path (str): Путь к видеофайлу
             
         Returns:
-            dict: Словарь с информацией о видео и транскрипцией
+            Dict[str, Any]: Словарь с результатами обработки:
+                - transcript: текст транскрипции
+                - summary: саммари видео
+                - duration: длительность видео в секундах
         """
         try:
-            # Проверка и очистка URL
-            video_id = self._extract_video_id(youtube_url)
-            if not video_id:
-                raise ValueError(f"Не удалось извлечь ID видео из URL: {youtube_url}")
+            logger.info(f"Начинаю обработку видео файла: {video_path}")
             
-            logger.info(f"Обработка YouTube видео с ID: {video_id}")
+            # Извлекаем аудио из видео
+            audio_path = await self._extract_audio(video_path)
+            logger.info(f"Аудио извлечено в: {audio_path}")
             
-            # Сначала пробуем через прокси, если он есть
-            if self.proxy:
-                try:
-                    logger.info(f"Попытка получения субтитров через прокси")
-                    result = await self._get_subtitles_via_proxy(video_id)
-                    return result
-                except Exception as proxy_e:
-                    logger.error(f"Не удалось получить субтитры через прокси: {proxy_e}")
+            # Получаем транскрипцию
+            transcript = await self._get_transcription(audio_path)
+            logger.info(f"Получена транскрипция длиной {len(transcript)} символов")
             
-            # Если нет прокси или он не сработал, пробуем напрямую
-            logger.info(f"Получение субтитров напрямую для видео {video_id}")
-            return await self._get_subtitles_via_api(video_id)
+            # Удаляем временный аудиофайл
+            os.remove(audio_path)
+            
+            # Получаем длительность видео
+            duration = self._get_video_duration(video_path)
+            
+            # Получаем саммари
+            summary = await self.summarizer.summarize(transcript)
+            logger.info(f"Получено саммари длиной {len(summary)} символов")
+            
+            return {
+                "transcript": transcript,
+                "summary": summary,
+                "duration": duration
+            }
+            
+        except Exception as e:
+            logger.error(f"Ошибка при обработке видео файла: {e}")
+            raise
+    
+    async def process_youtube_url(self, youtube_url: str) -> Dict[str, Any]:
+        """
+        Обрабатывает YouTube URL и возвращает транскрипцию.
+        
+        Args:
+            youtube_url (str): Ссылка на YouTube видео
+            
+        Returns:
+            Dict[str, Any]: Словарь с результатами обработки:
+                - transcript: текст транскрипции
+                - video_title: название видео
+                - video_id: ID видео
+                - video_url: URL видео
+        """
+        try:
+            logger.info(f"Начинаю обработку YouTube URL: {youtube_url}")
+            
+            # Получаем субтитры и метаданные
+            subtitle_result = await self.youtube_extractor.get_subtitles(youtube_url)
+            if not subtitle_result["transcript"]:
+                raise Exception("Не удалось получить субтитры для данного видео")
+            
+            transcript = subtitle_result["transcript"]
+            logger.info(f"Получена транскрипция длиной {len(transcript)} символов")
+            
+            return {
+                "transcript": transcript,
+                "video_title": subtitle_result.get("video_title", ""),
+                "video_id": subtitle_result.get("video_id", ""),
+                "video_url": youtube_url
+            }
             
         except Exception as e:
             logger.error(f"Ошибка при обработке YouTube URL: {e}")
             raise
-
-    async def _get_subtitles_via_api(self, video_id):
+    
+    async def _extract_audio(self, video_path: str) -> str:
         """
-        Получает субтитры через YouTube Transcript API.
+        Извлекает аудио из видеофайла.
         
         Args:
-            video_id (str): ID видео на YouTube
+            video_path (str): Путь к видеофайлу
             
         Returns:
-            dict: Словарь с информацией о видео и транскрипцией
+            str: Путь к извлеченному аудиофайлу
         """
         try:
-            # Пытаемся вывести список доступных транскриптов
-            available_transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
-            logger.info(f"Доступные транскрипты: {', '.join([f'{t.language} ({t.language_code})' for t in available_transcripts._transcripts.values()])}")
+            # Создаем временный файл для аудио
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                audio_path = tmp_file.name
             
-            # Сначала пробуем получить русские субтитры
-            try:
-                logger.info("Попытка получить русские субтитры")
-                transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ru'])
-                logger.info(f"Получены русские субтитры, {len(transcript_list)} сегментов")
-            except (NoTranscriptFound, TranscriptsDisabled) as e:
-                logger.info(f"Русские субтитры недоступны: {e}, пробуем английские")
-                # Если русские недоступны, пробуем английские
-                transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
-                logger.info(f"Получены английские субтитры, {len(transcript_list)} сегментов")
-        
+            # Извлекаем аудио асинхронно с помощью ffmpeg
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", audio_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await proc.communicate()
+            
+            if proc.returncode != 0:
+                logger.error(f"Ошибка при извлечении аудио: {stderr.decode()}")
+                raise Exception(f"Не удалось извлечь аудио из видео: {stderr.decode()}")
+            
+            return audio_path
+            
         except Exception as e:
-            logger.error(f"Ошибка при получении субтитров: {e}")
-            logger.info("Попытка получить автоматически созданные транскрипты")
-            try:
-                transcript = YouTubeTranscriptApi.get_transcript(video_id)
-                logger.info(f"Получены автоматические субтитры, {len(transcript)} сегментов")
-                transcript_list = transcript
-            except Exception as nested_e:
-                logger.error(f"Не удалось получить субтитры: {nested_e}")
-                raise Exception(f"Не удалось получить субтитры для видео: {str(nested_e)}")
-        
-        # Объединение текста субтитров
-        transcription = " ".join([item['text'] for item in transcript_list])
-        
-        return {
-            'video_id': video_id,
-            'transcription': transcription,
-            'transcript_segments': transcript_list
-        }
+            logger.error(f"Ошибка при извлечении аудио из видео: {e}")
+            raise
     
-    async def _get_subtitles_via_proxy(self, video_id):
+    async def _get_transcription(self, audio_path: str) -> str:
         """
-        Получает субтитры через прокси-сервер.
+        Получает транскрипцию аудиофайла, используя Whisper API.
         
         Args:
-            video_id (str): ID видео на YouTube
+            audio_path (str): Путь к аудиофайлу
             
         Returns:
-            dict: Словарь с информацией о видео и транскрипцией
+            str: Текст транскрипции
         """
         try:
-            # Формируем прокси для библиотеки
-            proxies = {'http': self.proxy, 'https': self.proxy}
+            from openai import OpenAI
             
-            # Пробуем получить список доступных транскриптов через прокси
-            available_transcripts = YouTubeTranscriptApi.list_transcripts(video_id, proxies=proxies)
-            available_langs = [f'{t.language} ({t.language_code})' for t in available_transcripts._transcripts.values()]
-            logger.info(f"Доступные через прокси транскрипты: {', '.join(available_langs)}")
+            client = OpenAI(api_key=self.openai_api_key)
             
-            # Пробуем русские субтитры через прокси
-            try:
-                logger.info("Попытка получить русские субтитры через прокси")
-                transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ru'], proxies=proxies)
-                logger.info(f"Получены русские субтитры через прокси, {len(transcript_list)} сегментов")
-            except (NoTranscriptFound, TranscriptsDisabled) as e:
-                logger.info(f"Русские субтитры недоступны через прокси: {e}, пробуем английские")
-                transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'], proxies=proxies)
-                logger.info(f"Получены английские субтитры через прокси, {len(transcript_list)} сегментов")
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=open(audio_path, "rb"),
+                    language="ru"
+                )
+            )
             
-            # Объединение текста субтитров
-            transcription = " ".join([item['text'] for item in transcript_list])
+            return response.text
             
-            return {
-                'video_id': video_id,
-                'transcription': transcription,
-                'transcript_segments': transcript_list,
-                'source': 'proxy'
-            }
         except Exception as e:
-            logger.error(f"Ошибка при получении субтитров через прокси: {e}")
-            raise Exception(f"Не удалось получить субтитры через прокси: {str(e)}")
+            logger.error(f"Ошибка при получении транскрипции: {e}")
+            raise
     
-    def _extract_video_id(self, youtube_url):
+    def _get_video_duration(self, video_path: str) -> float:
         """
-        Извлекает ID видео из YouTube URL.
+        Получает длительность видеофайла в секундах.
         
         Args:
-            youtube_url (str): URL видео на YouTube
+            video_path (str): Путь к видеофайлу
             
         Returns:
-            str: ID видео или None, если ID не найден
+            float: Длительность видео в секундах
         """
-        match = re.search(YOUTUBE_URL_PATTERN, youtube_url)
-        if match:
-            return match.group(6)
-        return None 
+        try:
+            clip = VideoFileClip(video_path)
+            duration = clip.duration
+            clip.close()
+            return duration
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении длительности видео: {e}")
+            logger.warning("Не удалось определить длительность, возвращаю 0.0")
+            return 0.0 
