@@ -20,7 +20,7 @@ class VideoProcessor:
         Args:
             openai_api_key (str, optional): API ключ OpenAI (необходим для саммаризации)
             temp_folder (str, optional): Путь к временной директории для хранения файлов
-            proxy (str, optional): Прокси-сервер для запросов к YouTube API (формат: http://user:pass@host:port)
+            proxy (str, optional): Прокси-сервер для запросов к YouTube API (формат: host:port:username:password)
         """
         self.openai_api_key = openai_api_key
         self.temp_folder = temp_folder or tempfile.mkdtemp()
@@ -32,9 +32,12 @@ class VideoProcessor:
         else:
             self.summarizer = None
         
-        self.youtube_extractor = YouTubeSubtitlesExtractor()
+        self.youtube_extractor = YouTubeSubtitlesExtractor(proxy=proxy)
         
-        logger.info("VideoProcessor: Инициализирован")
+        if proxy:
+            logger.info(f"VideoProcessor: Инициализирован с прокси")
+        else:
+            logger.info("VideoProcessor: Инициализирован")
     
     async def process_video_file(self, video_path: str) -> Dict[str, Any]:
         """

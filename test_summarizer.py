@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 # Загрузка переменных окружения
 dotenv.load_dotenv()
 
+# Прокси по умолчанию
+DEFAULT_PROXY = "194.226.4.30:63825:MkBea3Vy:P6S5C8zd"
+
 async def test_youtube_transcript(youtube_url, proxy=None):
     """
     Тестирование получения транскрипции из YouTube видео.
@@ -73,16 +76,23 @@ async def main():
     # Настройка аргументов командной строки
     parser = argparse.ArgumentParser(description='Тестирование получения транскрипции видео')
     parser.add_argument('--youtube', help='URL YouTube видео для тестирования')
-    parser.add_argument('--proxy', help='Прокси-сервер для доступа к YouTube API (http://user:pass@host:port)')
+    parser.add_argument('--proxy', help='Прокси-сервер для доступа к YouTube API (host:port:username:password)')
+    parser.add_argument('--no-proxy', action='store_true', help='Не использовать прокси (даже по умолчанию)')
     args = parser.parse_args()
     
     # Тестовый URL по умолчанию
     youtube_url = args.youtube or "https://www.youtube.com/watch?v=UQYV8--TZqI"
-    proxy = args.proxy
+    
+    # Определяем, какой прокси использовать
+    proxy = None
+    if not args.no_proxy:
+        proxy = args.proxy or DEFAULT_PROXY
     
     # Вывод информации о параметрах
     if proxy:
         print(f"Используем прокси: {proxy}")
+    else:
+        print("Тестирование без прокси")
     
     # Тестируем YouTube URL
     success = await test_youtube_transcript(youtube_url, proxy)

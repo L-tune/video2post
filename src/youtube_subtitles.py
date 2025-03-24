@@ -14,11 +14,50 @@ logger = logging.getLogger(__name__)
 class YouTubeSubtitlesExtractor:
     """Класс для извлечения субтитров из YouTube видео."""
     
-    def __init__(self):
+    def __init__(self, proxy: str = None):
         """
         Инициализация экстрактора субтитров.
+        
+        Args:
+            proxy (str, optional): Прокси-сервер для запросов к YouTube API (формат: host:port:username:password)
         """
-        logger.info("YouTubeSubtitlesExtractor: Инициализирован")
+        self.proxy = proxy
+        self.proxy_dict = self._prepare_proxy_dict() if proxy else None
+        
+        if proxy:
+            logger.info(f"YouTubeSubtitlesExtractor: Инициализирован с прокси")
+        else:
+            logger.info("YouTubeSubtitlesExtractor: Инициализирован")
+
+    def _prepare_proxy_dict(self) -> Dict[str, str]:
+        """
+        Преобразует строку прокси в словарь для использования в запросах.
+        
+        Returns:
+            Dict[str, str]: Словарь с настройками прокси
+        """
+        try:
+            parts = self.proxy.split(':')
+            if len(parts) == 4:
+                host, port, username, password = parts
+                proxy_url = f"http://{username}:{password}@{host}:{port}"
+                return {
+                    'http': proxy_url,
+                    'https': proxy_url
+                }
+            elif len(parts) == 2:
+                host, port = parts
+                proxy_url = f"http://{host}:{port}"
+                return {
+                    'http': proxy_url,
+                    'https': proxy_url
+                }
+            else:
+                logger.warning(f"Неверный формат прокси: {self.proxy}, должен быть host:port или host:port:username:password")
+                return None
+        except Exception as e:
+            logger.error(f"Ошибка при подготовке прокси: {e}")
+            return None
 
     def extract_video_id(self, youtube_url):
         """
@@ -129,10 +168,18 @@ class YouTubeSubtitlesExtractor:
             Dict[str, Any]: Информация о видео
         """
         try:
+            cmd = ["yt-dlp", f"https://www.youtube.com/watch?v={video_id}", 
+                   "--dump-json", "--no-playlist", "--skip-download"]
+            
+            # Добавляем прокси, если он указан
+            if self.proxy_dict:
+                proxy_url = self.proxy_dict['http']
+                cmd.extend(["--proxy", proxy_url])
+                logger.info(f"Используем прокси для yt-dlp: {proxy_url}")
+            
             # Запускаем yt-dlp для получения информации о видео
             proc = await asyncio.create_subprocess_exec(
-                "yt-dlp", f"https://www.youtube.com/watch?v={video_id}", 
-                "--dump-json", "--no-playlist", "--skip-download",
+                *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -186,23 +233,50 @@ class YouTubeSubtitlesExtractor:
             str: Текст субтитров или пустая строка, если субтитры недоступны
         """
         try:
-            # Пытаемся получить субтитры
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-            
-            # Сначала пытаемся найти русские субтитры
+            # Сначала пробуем без прокси, если он не работает
             try:
-                transcript = transcript_list.find_transcript(['ru'])
-                logger.info("Найдены русские субтитры")
-            except NoTranscriptFound:
-                # Если русских нет, берем любые доступные
-                transcript = transcript_list.find_transcript(['en'])
-                logger.info("Найдены английские субтитры")
-                # Переводим субтитры на русский
-                transcript = transcript.translate('ru')
-                logger.info("Субтитры переведены на русский")
-            
-            # Получаем текст субтитров
-            transcript_data = transcript.fetch()
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                logger.info("Получен список транскриптов без прокси")
+                
+                # Сначала пытаемся найти русские субтитры
+                try:
+                    transcript = transcript_list.find_transcript(['ru'])
+                    logger.info("Найдены русские субтитры")
+                except NoTranscriptFound:
+                    # Если русских нет, берем английские
+                    transcript = transcript_list.find_transcript(['en'])
+                    logger.info("Найдены английские субтитры")
+                    # Переводим субтитры на русский
+                    transcript = transcript.translate('ru')
+                    logger.info("Субтитры переведены на русский")
+                
+                # Получаем текст субтитров
+                transcript_data = transcript.fetch()
+                
+            except Exception as e:
+                # Если без прокси не получилось, пробуем с прокси
+                if self.proxy_dict:
+                    logger.info(f"Не удалось получить субтитры без прокси: {e}. Пробуем через прокси")
+                    transcript_list = YouTubeTranscriptApi.list_transcripts(video_id, proxies=self.proxy_dict)
+                    logger.info("Получен список транскриптов через прокси")
+                    
+                    # Сначала пытаемся найти русские субтитры
+                    try:
+                        transcript = transcript_list.find_transcript(['ru'])
+                        logger.info("Найдены русские субтитры через прокси")
+                    except NoTranscriptFound:
+                        # Если русских нет, берем английские
+                        transcript = transcript_list.find_transcript(['en'])
+                        logger.info("Найдены английские субтитры через прокси")
+                        # Переводим субтитры на русский
+                        transcript = transcript.translate('ru')
+                        logger.info("Субтитры переведены на русский через прокси")
+                    
+                    # Получаем текст субтитров
+                    transcript_data = transcript.fetch(proxies=self.proxy_dict)
+                else:
+                    # Если прокси нет, пробрасываем исключение
+                    raise e
             
             # Объединяем все фрагменты субтитров в один текст
             transcript_text = " ".join([item['text'] for item in transcript_data])
