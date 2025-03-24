@@ -16,16 +16,23 @@ YOUTUBE_URL_PATTERN = r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(c
 class VideoProcessor:
     """Класс для обработки видеофайлов, YouTube URL и извлечения аудиодорожки."""
     
-    def __init__(self, temp_folder, openai_api_key=None):
+    def __init__(self, temp_folder, openai_api_key=None, proxy=None):
         """
         Инициализация процессора видео.
         
         Args:
             temp_folder (str): Путь к временной директории для хранения файлов
             openai_api_key (str, optional): API ключ OpenAI для транскрипции
+            proxy (str, optional): Прокси-сервер для запросов к YouTube API (формат: http://user:pass@host:port)
         """
         self.temp_folder = temp_folder
         self.openai_api_key = openai_api_key
+        self.proxy = proxy
+        
+        if proxy:
+            logger.info(f"Инициализирован VideoProcessor с прокси")
+        else:
+            logger.info("Инициализирован VideoProcessor без прокси")
     
     async def extract_audio(self, video_path):
         """
@@ -106,6 +113,16 @@ class VideoProcessor:
                 return result
             except Exception as e:
                 logger.error(f"Не удалось получить субтитры через API: {e}")
+                
+                # Если у нас есть прокси, пробуем через него
+                if self.proxy:
+                    try:
+                        logger.info(f"Попытка получения субтитров через прокси")
+                        result = await self._get_subtitles_via_proxy(video_id)
+                        return result
+                    except Exception as proxy_e:
+                        logger.error(f"Не удалось получить субтитры через прокси: {proxy_e}")
+                
                 logger.info("Переключаемся на резервный метод: загрузка видео и транскрипция")
                 
                 # Если не удалось получить субтитры, используем резервный метод
@@ -164,6 +181,48 @@ class VideoProcessor:
             'transcript_segments': transcript_list
         }
     
+    async def _get_subtitles_via_proxy(self, video_id):
+        """
+        Получает субтитры через прокси-сервер.
+        
+        Args:
+            video_id (str): ID видео на YouTube
+            
+        Returns:
+            dict: Словарь с информацией о видео и транскрипцией
+        """
+        try:
+            # Формируем прокси для библиотеки
+            proxies = {'http': self.proxy, 'https': self.proxy}
+            
+            # Пробуем получить список доступных транскриптов через прокси
+            available_transcripts = YouTubeTranscriptApi.list_transcripts(video_id, proxies=proxies)
+            available_langs = [f'{t.language} ({t.language_code})' for t in available_transcripts._transcripts.values()]
+            logger.info(f"Доступные через прокси транскрипты: {', '.join(available_langs)}")
+            
+            # Пробуем русские субтитры через прокси
+            try:
+                logger.info("Попытка получить русские субтитры через прокси")
+                transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ru'], proxies=proxies)
+                logger.info(f"Получены русские субтитры через прокси, {len(transcript_list)} сегментов")
+            except (NoTranscriptFound, TranscriptsDisabled) as e:
+                logger.info(f"Русские субтитры недоступны через прокси: {e}, пробуем английские")
+                transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'], proxies=proxies)
+                logger.info(f"Получены английские субтитры через прокси, {len(transcript_list)} сегментов")
+            
+            # Объединение текста субтитров
+            transcription = " ".join([item['text'] for item in transcript_list])
+            
+            return {
+                'video_id': video_id,
+                'transcription': transcription,
+                'transcript_segments': transcript_list,
+                'source': 'proxy'
+            }
+        except Exception as e:
+            logger.error(f"Ошибка при получении субтитров через прокси: {e}")
+            raise Exception(f"Не удалось получить субтитры через прокси: {str(e)}")
+    
     async def _download_and_transcribe(self, video_id):
         """
         Скачивает видео с YouTube и транскрибирует аудио.
@@ -202,6 +261,10 @@ class VideoProcessor:
                     youtube_url
                 ]
                 
+                # Если есть прокси, используем его
+                if self.proxy:
+                    command.extend(['--proxy', self.proxy])
+                
                 process = await asyncio.create_subprocess_exec(
                     *command,
                     stdout=asyncio.subprocess.PIPE,
@@ -217,18 +280,24 @@ class VideoProcessor:
                 logger.info(f"Аудио успешно загружено в {audio_path}")
             except Exception as e:
                 logger.error(f"Ошибка при скачивании аудио через yt-dlp: {e}")
-                # Альтернативный метод с ffmpeg
+                # Альтернативный метод с YoutubeDL
                 logger.info("Пробуем альтернативный метод загрузки")
                 
-                # Пробуем загрузить видео через urllib и затем извлечь аудио
+                # Пробуем загрузить видео через YoutubeDL
                 import urllib.request
                 from yt_dlp import YoutubeDL
                 
-                with YoutubeDL({
+                ydl_opts = {
                     'format': 'bestaudio',
                     'outtmpl': audio_path,
                     'quiet': True
-                }) as ydl:
+                }
+                
+                # Добавляем прокси если есть
+                if self.proxy:
+                    ydl_opts['proxy'] = self.proxy
+                
+                with YoutubeDL(ydl_opts) as ydl:
                     ydl.download([youtube_url])
                 
                 logger.info(f"Аудио успешно загружено в {audio_path}")

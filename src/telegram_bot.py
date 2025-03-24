@@ -170,21 +170,35 @@ class TelegramBot:
             try:
                 from .video_processor import VideoProcessor
                 
-                # Создаем экземпляр VideoProcessor с передачей ключа API
+                # Получаем proxy из переменных среды
+                youtube_proxy = os.getenv("YOUTUBE_PROXY")
+                
+                # Создаем экземпляр VideoProcessor с передачей ключа API и прокси
                 video_processor = VideoProcessor(
                     temp_folder=self.temp_folder,
-                    openai_api_key=self.openai_api_key
+                    openai_api_key=self.openai_api_key,
+                    proxy=youtube_proxy
                 )
+                
+                if youtube_proxy:
+                    logger.info(f"Используется прокси для YouTube: {youtube_proxy[:10]}...")
                 
                 # Обрабатываем YouTube URL
                 await message.edit_text("⏳ Получаю информацию о видео...")
                 video_data = await video_processor.process_youtube_url(clean_url)
                 
+                # Информация о методе получения данных
+                source = ""
+                if "source" in video_data and video_data["source"] == "proxy":
+                    source = " (через прокси)"
+                elif "download_method" in video_data:
+                    source = " (через Whisper)"
+                
                 transcription = video_data.get('transcription')
                 
                 # Если транскрипция получена успешно, генерируем пост
                 if transcription:
-                    await message.edit_text("⏳ Генерирую пост на основе транскрипции...")
+                    await message.edit_text(f"⏳ Генерирую пост на основе транскрипции{source}...")
                     post_content = await self.content_generator.generate_post(transcription)
                     
                     # Отправка результата
