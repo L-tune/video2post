@@ -22,7 +22,6 @@ async def main():
         telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
         openai_api_key = os.getenv("OPENAI_API_KEY")
         claude_api_key = os.getenv("CLAUDE_API_KEY", None)
-        authorized_user_ids = os.getenv("AUTHORIZED_USER_IDS", "")
         
         # Отладочная информация
         logger.info(f"Загруженный OPENAI_API_KEY: {openai_api_key[:10]}...")
@@ -40,17 +39,13 @@ async def main():
         if not openai_api_key.startswith("sk-"):
             logger.warning(f"Неверный формат ключа OpenAI API. Ключ должен начинаться с 'sk-': {openai_api_key[:10]}...")
         
-        # Создание конфигурационного словаря
-        config = {
-            'TELEGRAM_BOT_TOKEN': telegram_token,
-            'OPENAI_API_KEY': openai_api_key,
-            'ANTHROPIC_API_KEY': claude_api_key,
-            'AUTHORIZED_USER_IDS': authorized_user_ids
-        }
-        
         # Инициализация и запуск бота
         logger.info("Запуск бота...")
-        bot = TelegramBot(config)
+        bot = TelegramBot(
+            token=telegram_token, 
+            openai_api_key=openai_api_key,
+            claude_api_key=claude_api_key
+        )
         await bot.start()
     
     except Exception as e:

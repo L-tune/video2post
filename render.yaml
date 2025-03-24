@@ -5,8 +5,8 @@ services:
     name: video2post
     env: python
     region: frankfurt
-    buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    buildCommand: pip install -r requirements-render.txt
+    startCommand: bash start.sh
     envVars:
       - key: OPENAI_API_KEY
         sync: false
