@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class VideoProcessor:
     """Класс для обработки видео файлов и получения саммари."""
     
-    def __init__(self, openai_api_key: str = None, temp_folder: str = None, proxy: str = None):
+    def __init__(self, openai_api_key: str = None, temp_folder: str = None, proxy: str = None, timeout: int = 30):
         """
         Инициализация процессора видео.
         
@@ -21,10 +21,12 @@ class VideoProcessor:
             openai_api_key (str, optional): API ключ OpenAI (необходим для саммаризации)
             temp_folder (str, optional): Путь к временной директории для хранения файлов
             proxy (str, optional): Прокси-сервер для запросов к YouTube API (формат: host:port:username:password)
+            timeout (int, optional): Таймаут для запросов в секундах
         """
         self.openai_api_key = openai_api_key
         self.temp_folder = temp_folder or tempfile.mkdtemp()
         self.proxy = proxy
+        self.timeout = timeout
         
         if openai_api_key:
             from src.summarizer import VideoSummarizer
@@ -32,12 +34,12 @@ class VideoProcessor:
         else:
             self.summarizer = None
         
-        self.youtube_extractor = YouTubeSubtitlesExtractor(proxy=proxy)
+        self.youtube_extractor = YouTubeSubtitlesExtractor(proxy=proxy, timeout=timeout)
         
         if proxy:
-            logger.info(f"VideoProcessor: Инициализирован с прокси")
+            logger.info(f"VideoProcessor: Инициализирован с прокси (таймаут: {timeout}с)")
         else:
-            logger.info("VideoProcessor: Инициализирован")
+            logger.info(f"VideoProcessor: Инициализирован (таймаут: {timeout}с)")
     
     async def process_video_file(self, video_path: str) -> Dict[str, Any]:
         """
