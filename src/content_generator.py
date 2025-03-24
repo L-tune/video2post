@@ -181,7 +181,6 @@ class ContentGenerator:
                 )
                 # Извлечение сгенерированного текста
                 return response.choices[0].message.content 
-            
         except Exception as e:
             logger.error(f"Ошибка при генерации поста: {e}")
             raise Exception(f"Не удалось сгенерировать пост: {str(e)}")
