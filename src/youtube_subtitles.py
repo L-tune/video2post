@@ -1,6 +1,9 @@
 import logging
 import asyncio
 import re
+import os
+import requests
+import xml.etree.ElementTree as ET
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from openai import OpenAI
 from anthropic import Anthropic
@@ -88,22 +91,153 @@ class YouTubeSubtitlesExtractor:
                 
             logger.info(f"Получен ID видео: {video_id}")
             
-            # Запуск в отдельном потоке, так как YouTube API блокирующий
-            loop = asyncio.get_event_loop()
-            transcript_text = await loop.run_in_executor(
-                None,
-                lambda: self._get_subtitles_sync(video_id, preferred_lang)
-            )
+            # Сначала пытаемся получить субтитры через youtube_transcript_api
+            try:
+                logger.info("Пытаемся получить субтитры через youtube_transcript_api...")
+                # Запуск в отдельном потоке, так как YouTube API блокирующий
+                loop = asyncio.get_event_loop()
+                transcript_text = await loop.run_in_executor(
+                    None,
+                    lambda: self._get_subtitles_sync(video_id, preferred_lang)
+                )
+                return transcript_text
             
-            return transcript_text
+            except Exception as e:
+                logger.warning(f"Не удалось получить субтитры через youtube_transcript_api: {e}")
+                
+                # Пробуем альтернативный метод - через YouTube API v3 или напрямую через тихтмл субтитры
+                logger.info("Пытаемся получить субтитры через альтернативный метод...")
+                subtitles = await self._get_subtitles_alternative(video_id, preferred_lang)
+                
+                if not subtitles or len(subtitles) < 100:  # проверяем, что получили не пустые субтитры
+                    raise Exception("Не удалось получить субтитры ни одним из доступных методов")
+                    
+                return subtitles
             
         except Exception as e:
             logger.error(f"Ошибка при получении субтитров: {e}")
             raise
     
+    async def _get_subtitles_alternative(self, video_id, preferred_lang='ru'):
+        """
+        Альтернативный метод получения субтитров напрямую из timedtext API YouTube.
+        
+        Args:
+            video_id (str): ID YouTube видео
+            preferred_lang (str): Предпочтительный язык субтитров
+            
+        Returns:
+            str: Текст субтитров или None, если субтитры недоступны
+        """
+        try:
+            # Получаем список доступных субтитров для видео
+            logger.info(f"Получаем список доступных субтитров для видео {video_id}...")
+            
+            # URL для получения списка субтитров
+            list_url = f"https://www.youtube.com/api/timedtext?type=list&v={video_id}"
+            
+            # Выполняем запрос в отдельном потоке
+            loop = asyncio.get_event_loop()
+            subtitles_list_response = await loop.run_in_executor(
+                None,
+                lambda: requests.get(list_url)
+            )
+            
+            if subtitles_list_response.status_code != 200:
+                logger.error(f"Ошибка при получении списка субтитров: {subtitles_list_response.status_code}")
+                return None
+            
+            # Парсим XML для получения доступных языков
+            try:
+                root = ET.fromstring(subtitles_list_response.text)
+                tracks = []
+                
+                # Получаем доступные треки субтитров
+                for track in root.findall('track'):
+                    lang_code = track.get('lang_code', '')
+                    lang_name = track.get('lang_translated', track.get('lang_original', lang_code))
+                    tracks.append({
+                        'lang_code': lang_code,
+                        'lang_name': lang_name,
+                        'name': track.get('name', ''),
+                        'id': track.get('id', '')
+                    })
+                
+                # Ищем предпочтительный язык
+                lang_to_use = None
+                for track in tracks:
+                    if track['lang_code'].startswith(preferred_lang):
+                        lang_to_use = track
+                        break
+                
+                # Если предпочтительный язык не найден, берем английский
+                if not lang_to_use:
+                    for track in tracks:
+                        if track['lang_code'].startswith('en'):
+                            lang_to_use = track
+                            break
+                
+                # Если и английский не найден, берем первый доступный
+                if not lang_to_use and tracks:
+                    lang_to_use = tracks[0]
+                
+                if not lang_to_use:
+                    logger.error("Не найдены доступные треки субтитров")
+                    return None
+                
+                logger.info(f"Используем трек субтитров: {lang_to_use['lang_name']} ({lang_to_use['lang_code']})")
+                
+                # Получаем субтитры для выбранного языка
+                lang_code = lang_to_use['lang_code']
+                track_name = lang_to_use.get('name', '')
+                track_id = lang_to_use.get('id', '')
+                
+                # Формируем URL для получения субтитров
+                subtitle_url = f"https://www.youtube.com/api/timedtext?lang={lang_code}&v={video_id}"
+                
+                # Добавляем имя трека, если оно есть
+                if track_name:
+                    subtitle_url += f"&name={track_name}"
+                
+                # Добавляем ID трека, если оно есть
+                if track_id:
+                    subtitle_url += f"&tlang={track_id}"
+                
+                # Выполняем запрос для получения субтитров
+                subtitles_response = await loop.run_in_executor(
+                    None,
+                    lambda: requests.get(subtitle_url)
+                )
+                
+                if subtitles_response.status_code != 200:
+                    logger.error(f"Ошибка при получении субтитров: {subtitles_response.status_code}")
+                    return None
+                
+                # Парсим XML для получения текста субтитров
+                subtitle_root = ET.fromstring(subtitles_response.text)
+                subtitle_text = ""
+                
+                for text in subtitle_root.findall('text'):
+                    if text.text:
+                        subtitle_text += text.text + " "
+                
+                # Очищаем HTML-теги из текста субтитров
+                subtitle_text = re.sub(r'<[^>]+>', '', subtitle_text)
+                
+                logger.info(f"Успешно получены субтитры для видео {video_id}")
+                return subtitle_text
+                
+            except ET.ParseError as e:
+                logger.error(f"Ошибка при парсинге XML: {e}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Ошибка при альтернативном получении субтитров: {e}")
+            return None
+    
     def _get_subtitles_sync(self, video_id, preferred_lang='ru'):
         """
-        Синхронный метод для получения субтитров.
+        Синхронный метод для получения субтитров через youtube_transcript_api.
         
         Args:
             video_id (str): ID YouTube видео
@@ -170,7 +304,7 @@ class YouTubeSubtitlesExtractor:
             return full_text
             
         except Exception as e:
-            logger.error(f"Ошибка при получении субтитров: {e}")
+            logger.error(f"Ошибка при получении субтитров через youtube_transcript_api: {e}")
             raise
     
     async def generate_summary(self, subtitle_text):
