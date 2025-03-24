@@ -1,4 +1,4 @@
-python-telegram-bot==20.0
+python-telegram-bot==20.5
 anthropic==0.19.1
 openai==1.68.2
 python-dotenv==1.0.0
