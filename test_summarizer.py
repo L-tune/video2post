@@ -11,7 +11,7 @@ load_dotenv()
 
 # Настройка логирования
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Изменено на DEBUG для более подробного логирования
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -35,6 +35,7 @@ async def main():
         print("Ошибка: Не установлена переменная окружения CLAUDE_API_KEY")
         return
     
+    logger.debug(f"Используемые API ключи: YouTube={youtube_api_key[:10]}..., Claude={claude_api_key[:10]}...")
     logger.info(f"Тестирование генерации саммари для URL: {youtube_url}")
     
     # Создаем саммарайзер
@@ -42,6 +43,7 @@ async def main():
     
     try:
         # Генерируем саммари
+        logger.debug("Начинаем генерацию саммари...")
         result = await summarizer.generate_summary(youtube_url)
         
         if result:
@@ -79,7 +81,7 @@ async def main():
             print("\nНе удалось сгенерировать саммари")
             
     except Exception as e:
-        logger.error(f"Ошибка при генерации саммари: {e}")
+        logger.error(f"Ошибка при генерации саммари: {e}", exc_info=True)  # Добавлен exc_info=True
         print(f"Произошла ошибка: {e}")
 
 if __name__ == "__main__":

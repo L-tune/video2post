@@ -7,6 +7,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from .download_manager import DownloadManager
 from .transcription import WhisperTranscriber
 from .content_generator import ContentGenerator
+from .summarizer import Summarizer
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,12 @@ class TelegramBot:
         
         logger.info(f"Инициализация транскрибера с ключом OpenAI: {openai_api_key[:10]}...")    
         self.transcriber = WhisperTranscriber(openai_api_key)
+        
+        # Инициализация саммарайзера для YouTube видео
+        youtube_api_key = os.getenv('YOUTUBE_API_KEY')
+        if not youtube_api_key:
+            raise ValueError("Не установлен YOUTUBE_API_KEY в переменных окружения")
+        self.summarizer = Summarizer(youtube_api_key=youtube_api_key, claude_api_key=claude_api_key)
         
         if use_claude:
             logger.info(f"Инициализация генератора контента с Claude API")
@@ -191,16 +198,21 @@ class TelegramBot:
                 if "source" in video_data and video_data["source"] == "proxy":
                     source = " (через прокси)"
                 
-                transcription = video_data.get('transcription')
+                transcription = video_data.get('transcript')
+                video_title = video_data.get('video_title', '')
                 
                 # Если транскрипция получена успешно, генерируем пост
                 if transcription:
                     await message.edit_text(f"⏳ Генерирую пост на основе субтитров{source}...")
-                    post_content = await self.content_generator.generate_post(transcription)
-                    
-                    # Отправка результата
-                    await message.edit_text("✅ Готово! Вот ваш пост:")
-                    await update.message.reply_text(post_content)
+                    # Используем саммарайзер для YouTube видео
+                    result = await self.summarizer.generate_summary(clean_url)
+                    if result and result.get('summary'):
+                        post_content = result['summary']
+                        # Отправка результата
+                        await message.edit_text("✅ Готово! Вот ваш пост:")
+                        await update.message.reply_text(post_content)
+                    else:
+                        await message.edit_text("❌ Не удалось сгенерировать саммари для видео.")
                 else:
                     await message.edit_text("❌ Не удалось получить субтитры для данного видео.")
             except Exception as e:

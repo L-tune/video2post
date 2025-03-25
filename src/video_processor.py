@@ -34,7 +34,12 @@ class VideoProcessor:
         else:
             self.summarizer = None
         
-        self.youtube_extractor = YouTubeSubtitlesExtractor(proxy=proxy, timeout=timeout)
+        # Получаем YouTube API ключ из переменных окружения
+        youtube_api_key = os.getenv('YOUTUBE_API_KEY')
+        if not youtube_api_key:
+            raise ValueError("Не установлен YOUTUBE_API_KEY в переменных окружения")
+            
+        self.youtube_extractor = YouTubeSubtitlesExtractor(api_key=youtube_api_key, timeout=timeout)
         
         if proxy:
             logger.info(f"VideoProcessor: Инициализирован с прокси (таймаут: {timeout}с)")
